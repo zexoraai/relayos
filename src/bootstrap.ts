@@ -3,6 +3,7 @@ import { closeDb } from './db/connection';
 import { closeQueue } from './queue';
 import { initStorage } from './storage';
 import { IngestionWorker } from './workers/ingestionWorker';
+import { TenantIngestionWorker } from './workers/tenantIngestionWorker';
 import { startProcessingWorker } from './workers/processingWorker';
 import { startPipelineWorker, closePipelineQueue } from './pipeline/worker';
 import { startFulfillmentWorker, stopFulfillmentWorker } from './fulfillment/worker';
@@ -27,6 +28,7 @@ const log = logger.child({ module: 'bootstrap' });
 
 interface RunningHandles {
   ingestionWorker: IngestionWorker | null;
+  tenantIngestionWorker: TenantIngestionWorker | null;
   processingWorker: ReturnType<typeof startProcessingWorker> | null;
   pipelineWorker: ReturnType<typeof startPipelineWorker> | null;
   shuttingDown: boolean;
@@ -34,6 +36,7 @@ interface RunningHandles {
 
 const handles: RunningHandles = {
   ingestionWorker: null,
+  tenantIngestionWorker: null,
   processingWorker: null,
   pipelineWorker: null,
   shuttingDown: false,
@@ -58,6 +61,14 @@ export async function startWorkers(): Promise<void> {
     await handles.ingestionWorker.start();
   } catch (error: any) {
     log.error({ error: error.message }, 'Ingestion worker failed to start; will retry on tick');
+  }
+
+  // Per-tenant IMAP poller — reads tenant_imap_settings on each tick and polls each tenant's mailbox.
+  handles.tenantIngestionWorker = new TenantIngestionWorker();
+  try {
+    await handles.tenantIngestionWorker.start();
+  } catch (error: any) {
+    log.error({ error: error.message }, 'Tenant ingestion worker failed to start');
   }
 
   handles.processingWorker = startProcessingWorker();
@@ -111,6 +122,10 @@ export async function gracefulShutdown(signal: string): Promise<void> {
     if (handles.ingestionWorker) {
       await handles.ingestionWorker.stop();
       log.info('Ingestion worker stopped');
+    }
+    if (handles.tenantIngestionWorker) {
+      await handles.tenantIngestionWorker.stop();
+      log.info('Tenant ingestion worker stopped');
     }
     if (handles.processingWorker) {
       await handles.processingWorker.close();
