@@ -42,3 +42,22 @@ coverage/
 # Temp build outputs
 tsc-out.txt
 build-out.txt
+pg-creds.txt
+*.dump
+*.sql.tmp
+
+# Temp deploy / CLI outputs (always local-only)
+setvar.txt
+push*.txt
+up*.txt
+deploy*.txt
+deps.json
+applogs.txt
+liveerr.txt
+runtime.txt
+build*.txt
+deploy-runtime.txt
+latest.txt
+workerlogs.txt
+client-tsc-out.txt
+tsc.txt

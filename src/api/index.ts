@@ -33,6 +33,10 @@ const log = logger.child({ module: 'api' });
 export function createApiServer(): express.Application {
   const app = express();
 
+  // Behind Railway / Cloudflare load balancer — trust the first proxy hop so
+  // req.ip and X-Forwarded-For are read correctly (express-rate-limit relies on this).
+  app.set('trust proxy', 1);
+
   // Middleware
   app.use(cors());
   app.use(express.json());
