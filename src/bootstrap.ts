@@ -75,8 +75,30 @@ export async function startWorkers(): Promise<void> {
 }
 
 export async function startAll(): Promise<void> {
+  // BOOT_MODE controls what runs:
+  //   - "api"     : API server only (no workers — useful when Redis or queues aren't ready yet)
+  //   - "workers" : Workers only
+  //   - "all"     : Both (default; legacy behavior)
+  const mode = (process.env.BOOT_MODE || 'all').toLowerCase();
+
+  if (mode === 'api') {
+    await startApi();
+    log.info({ mode: 'api' }, 'Combined process running (API-only)');
+    return;
+  }
+  if (mode === 'workers') {
+    await startWorkers();
+    log.info({ mode: 'workers' }, 'Combined process running (workers-only)');
+    return;
+  }
+
+  // Default: api + workers, with workers wrapped so a worker failure does not crash the api
   await startApi();
-  await startWorkers();
+  try {
+    await startWorkers();
+  } catch (error: any) {
+    log.error({ error: error.message, stack: error.stack }, 'Workers failed to start — API will continue running without them');
+  }
   log.info({ mode: 'all' }, 'Combined process running');
 }
 

@@ -51,8 +51,12 @@ COPY --from=client-build /app/public/dist ./public/dist
 # Storage dir for attachments
 RUN mkdir -p /app/storage/attachments
 
+# Entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 3001
 ENV API_PORT=3001
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sh", "-c", "node node_modules/.bin/knex migrate:latest --knexfile knexfile.js --env production && node dist/index.js"]
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
