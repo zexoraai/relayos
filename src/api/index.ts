@@ -43,7 +43,17 @@ export function createApiServer(): express.Application {
 
   // Serve static files (new SPA build takes priority, then legacy public/)
   app.use('/new', express.static(path.join(__dirname, '../../public/dist')));
-  app.use(express.static(path.join(__dirname, '../../public')));
+  app.use(
+    express.static(path.join(__dirname, '../../public'), {
+      // Force the browser to re-validate every time for the legacy dashboard JS/HTML.
+      // ETag still works, but a stale cached copy never wins.
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html') || filePath.endsWith('app.js')) {
+          res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        }
+      },
+    }),
+  );
 
   // Rate limiting for auth endpoints
   const authLimiter = rateLimit({
