@@ -809,8 +809,10 @@ async function renderWhatsApp() {
   if (settings.configured) html += `<div class="flex items-center gap-2 mb-4"><span class="w-2 h-2 rounded-full bg-green-400"></span><span class="text-sm text-green-600 font-medium">Connected</span><span class="text-xs text-gray-400 ml-2">${settings.phone_number_id||''}</span></div>`;
   html += `<div class="space-y-3">`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Phone Number ID</label><input id="wa-pn-id" value="${settings.phone_number_id||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Business Account ID</label><input id="wa-baid" value="${settings.business_account_id||''}" placeholder="optional" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Display Number</label><input id="wa-display" value="${settings.display_phone_number||''}" placeholder="+27..." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Access Token</label><input id="wa-token" type="password" placeholder="paste new token" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Verify Token</label><input id="wa-verify" value="${settings.verify_token||''}" placeholder="for inbound webhook" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `</div><div class="flex gap-2 mt-4"><button onclick="saveWaSettings()" class="flex-1 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button>`;
   if (settings.configured) html += `<button onclick="deleteWaSettings()" class="px-4 py-2.5 bg-red-50 text-red-500 font-semibold rounded-full text-sm hover:bg-red-100 transition-all">Remove</button>`;
   html += `</div></div>`;
@@ -895,12 +897,20 @@ async function renderWhatsApp() {
   window._waTemplates = templates;
 }
 async function saveWaSettings() {
-  const body = { phone_number_id: document.getElementById('wa-pn-id').value, display_phone_number: document.getElementById('wa-display').value, business_account_id: document.getElementById('wa-baid').value };
-  const tok = document.getElementById('wa-token').value;
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const body = {
+    phone_number_id: v('wa-pn-id'),
+    display_phone_number: v('wa-display'),
+    business_account_id: v('wa-baid'),
+    verify_token: v('wa-verify'),
+  };
+  const tok = v('wa-token');
   if (tok) body.access_token = tok;
-  if (!body.phone_number_id || !body.access_token) { toast('Phone Number ID and Access Token required','error'); return; }
+  if (!body.phone_number_id) { toast('Phone Number ID is required', 'error'); return; }
+  if (!body.access_token) { toast('Access Token is required (paste a new one to save)', 'error'); return; }
   const { data } = await api('POST', '/whatsapp/settings', body);
-  if (data.success) { toast('WhatsApp settings saved','success'); setTimeout(()=>renderWhatsApp(),500); } else toast(data.error?.message||'Failed','error');
+  if (data.success) { toast('WhatsApp settings saved', 'success'); setTimeout(() => renderWhatsApp(), 500); }
+  else toast(data.error?.message || 'Failed', 'error');
 }
 async function deleteWaSettings() { if(!confirm('Remove WhatsApp settings?'))return; await api('DELETE','/whatsapp/settings'); toast('Removed','info'); renderWhatsApp(); }
 async function saveWaTemplate(purpose) { const body_text=document.getElementById('wa-tpl-'+purpose).value; const{data}=await api('PUT','/whatsapp/templates/'+purpose,{body_text}); if(data.success)toast('Template saved','success');else toast('Failed','error'); }
