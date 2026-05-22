@@ -9,7 +9,7 @@ public/dist
 .env
 .env.*
 !.env.example
-storage/
+/storage/
 public/uploads/
 *.log
 .DS_Store

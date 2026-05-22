@@ -13,8 +13,8 @@ public/dist/
 .env.*
 !.env.example
 
-# Storage (runtime artifacts)
-storage/
+# Storage (runtime artifacts) — only top-level, NOT src/storage which is source code
+/storage/
 public/uploads/
 
 # Logs
