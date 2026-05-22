@@ -1,0 +1,49 @@
+[
+  {
+    "fixture": "locker-to-door.txt",
+    "expected": {
+      "OrderNumber": "1625",
+      "shippingAddress": "12 Voortrekker Road, Upington, Northern Cape 8801, South Africa",
+      "deliverMethod": "locker-to-door",
+      "phone_number": "0847861917",
+      "customer_name": "Adele Brink",
+      "collectionMethod": null,
+      "upload_type": "automatic"
+    }
+  },
+  {
+    "fixture": "locker-to-locker.txt",
+    "expected": {
+      "OrderNumber": "2131",
+      "shippingAddress": "1 Bally Duff, Bethlehem, Free State 9701, South Africa",
+      "deliverMethod": "locker-to-locker",
+      "phone_number": "0832886429",
+      "customer_name": "Otto Wachter",
+      "collectionMethod": null,
+      "upload_type": "automatic"
+    }
+  },
+  {
+    "fixture": "collection-order.txt",
+    "expected": {
+      "OrderNumber": "3916",
+      "deliverMethod": "store collection",
+      "phone_number": "0823456789",
+      "customer_name": "Liezel Du Plessis",
+      "collectionMethod": "collection",
+      "upload_type": "manual"
+    }
+  },
+  {
+    "fixture": "dedup-address.txt",
+    "expected": {
+      "OrderNumber": "2106",
+      "shippingAddress": "OVK, Barkly East, Eastern Cape 9786, South Africa",
+      "deliverMethod": "locker-to-locker",
+      "phone_number": "0827738037",
+      "customer_name": "Steve van Zyl",
+      "collectionMethod": null,
+      "upload_type": "automatic"
+    }
+  }
+]

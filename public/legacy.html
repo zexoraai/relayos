@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RelayOS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'] },
+          colors: {
+            brand: { 50: '#fefce8', 100: '#fef9c3', 200: '#fef08a', 300: '#fde047', 400: '#facc15', 500: '#eab308', 600: '#ca8a04', 700: '#a16207' },
+            surface: { 50: '#fefdfb', 100: '#fdf8f0', 200: '#faf3e8', 300: '#f5ede0' },
+            dark: { 800: '#1c1c1e', 900: '#141416' }
+          },
+          borderRadius: { '2xl': '1rem', '3xl': '1.25rem', '4xl': '1.5rem' },
+          boxShadow: {
+            'card': '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)',
+            'card-hover': '0 10px 40px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
+            'elevated': '0 20px 60px rgba(0,0,0,0.1), 0 4px 16px rgba(0,0,0,0.05)',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { -webkit-font-smoothing: antialiased; }
+    body { background: linear-gradient(135deg, #fefdfb 0%, #fdf8f0 50%, #faf3e8 100%); }
+    .sidebar-item.active { background: rgba(250,204,21,0.12); border-left: 3px solid #facc15; color: #facc15; }
+    .glass-card { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.8); }
+    .stat-glow { box-shadow: 0 0 0 1px rgba(250,204,21,0.1), 0 4px 20px rgba(250,204,21,0.06); }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-fadeUp { animation: fadeUp 0.3s ease-out; }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .pulse-dot { animation: pulse-dot 1.5s infinite; }
+    .modal-backdrop { backdrop-filter: blur(6px); }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #d1d5db; }
+  </style>
+</head>
+<body class="font-sans text-gray-900 min-h-screen">
+
+  <!-- AUTH -->
+  <div id="auth-container" class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-md">
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-extrabold tracking-tight text-brand-600">RelayOS</h1>
+        <p class="text-sm text-gray-400 mt-1">Intelligent order fulfillment</p>
+      </div>
+
+      <!-- Login -->
+      <div id="page-login" class="bg-white rounded-3xl shadow-elevated p-8">
+        <h2 class="text-xl font-bold mb-1">Welcome back</h2>
+        <p class="text-sm text-gray-400 mb-6">Sign in to your account</p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Email</label>
+            <input type="email" id="login-email" placeholder="you@company.com" class="w-full px-4 py-3 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Password</label>
+            <input type="password" id="login-password" placeholder="Enter password" class="w-full px-4 py-3 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all">
+          </div>
+        </div>
+        <div id="login-error" class="text-red-500 text-xs mt-2 hidden"></div>
+        <button onclick="doLogin()" class="w-full mt-6 py-3 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full transition-all hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0">Sign In</button>
+        <p class="text-center text-xs text-gray-400 mt-4">Don't have an account? <a onclick="showPage('register')" class="text-brand-600 font-semibold cursor-pointer hover:underline">Register</a></p>
+      </div>
+
+      <!-- Register -->
+      <div id="page-register" class="bg-white rounded-3xl shadow-elevated p-8 hidden">
+        <h2 class="text-xl font-bold mb-1">Create account</h2>
+        <p class="text-sm text-gray-400 mb-6">Start your fulfillment journey</p>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Email</label>
+            <input type="email" id="reg-email" placeholder="you@company.com" class="w-full px-4 py-3 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Password</label>
+            <input type="password" id="reg-password" placeholder="Min 8 characters" class="w-full px-4 py-3 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Confirm</label>
+            <input type="password" id="reg-confirm" placeholder="Re-enter password" class="w-full px-4 py-3 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400 focus:bg-white transition-all">
+          </div>
+        </div>
+        <div id="reg-error" class="text-red-500 text-xs mt-2 hidden"></div>
+        <button onclick="doRegister()" class="w-full mt-6 py-3 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full transition-all hover:shadow-lg hover:-translate-y-0.5">Create Account</button>
+        <p class="text-center text-xs text-gray-400 mt-4">Already have an account? <a onclick="showPage('login')" class="text-brand-600 font-semibold cursor-pointer hover:underline">Sign in</a></p>
+      </div>
+
+      <!-- Onboarding -->
+      <div id="page-onboarding" class="bg-white rounded-3xl shadow-elevated p-8 hidden">
+        <div class="flex gap-1 mb-6"><div class="step flex-1 h-1 bg-gray-200 rounded-full" id="step-1"></div><div class="step flex-1 h-1 bg-gray-200 rounded-full" id="step-2"></div><div class="step flex-1 h-1 bg-gray-200 rounded-full" id="step-3"></div><div class="step flex-1 h-1 bg-gray-200 rounded-full" id="step-4"></div><div class="step flex-1 h-1 bg-gray-200 rounded-full" id="step-5"></div></div>
+        <div id="onboarding-content"></div>
+        <div id="onboarding-error" class="text-red-500 text-xs mt-2 hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div id="app-layout" class="hidden flex min-h-screen">
+    <!-- Sidebar -->
+    <aside class="w-[240px] bg-dark-900 text-white flex flex-col fixed inset-y-0 left-0 z-50">
+      <div class="px-6 py-6">
+        <h1 class="text-xl font-extrabold text-brand-400 tracking-tight">RelayOS</h1>
+      </div>
+      <nav class="flex-1 overflow-y-auto px-3">
+        <ul id="sidebar-nav" class="space-y-0.5">
+          <li class="px-3 pt-4 pb-1 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Operations</li>
+          <li class="sidebar-item active" onclick="switchTab('overview')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5">Overview</span></li>
+          <li class="sidebar-item" onclick="switchTab('pipeline')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Pipeline</span></li>
+          <li class="sidebar-item" onclick="switchTab('fulfillment')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Fulfillment</span></li>
+          <li class="sidebar-item" onclick="switchTab('customers')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Customers</span></li>
+
+          <li class="px-3 pt-6 pb-1 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">AI & Messaging</li>
+          <li class="sidebar-item" onclick="switchTab('agents')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Agents</span></li>
+          <li class="sidebar-item" onclick="switchTab('caretaker')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Caretaker</span></li>
+          <li class="sidebar-item" onclick="switchTab('whatsapp')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">WhatsApp</span></li>
+          <li class="sidebar-item" onclick="switchTab('inbox')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Inbox</span></li>
+
+          <li class="px-3 pt-6 pb-1 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Configuration</li>
+          <li class="sidebar-item" onclick="switchTab('knowledge')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Knowledge</span></li>
+          <li class="sidebar-item" onclick="switchTab('settings')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Settings</span></li>
+
+          <li class="px-3 pt-6 pb-1 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">System</li>
+          <li class="sidebar-item" onclick="switchTab('failed')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Failed Jobs</span></li>
+          <li class="sidebar-item" onclick="switchTab('health')"><span class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">Health</span></li>
+        </ul>
+      </nav>
+      <div class="px-6 py-4 border-t border-white/5">
+        <button onclick="doLogout()" class="w-full py-2 text-xs text-gray-400 hover:text-white transition-colors">Sign Out</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="flex-1 ml-[240px] p-8 overflow-y-auto">
+      <div class="max-w-7xl mx-auto">
+        <div class="flex items-center justify-between mb-8">
+          <div>
+            <h1 id="page-title" class="text-2xl font-bold tracking-tight">Overview</h1>
+            <p id="page-subtitle" class="text-sm text-gray-400 mt-0.5">Welcome back</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm" id="user-avatar">U</div>
+          </div>
+        </div>
+        <div id="tab-content" class="animate-fadeUp"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-root"></div>
+
+  <!-- Toast -->
+  <div id="toast-container" class="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

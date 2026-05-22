@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build output
+dist/
+client/dist/
+public/dist/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Storage (runtime artifacts)
+storage/
+public/uploads/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local tunnels
+cloudflared.exe
+cloudflared
+*.tunnel
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Temp build outputs
+tsc-out.txt
+build-out.txt

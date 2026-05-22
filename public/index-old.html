@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RelayOS</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; min-height: 100vh; }
+    .auth-container { max-width: 420px; margin: 0 auto; padding: 60px 20px; }
+    .card { background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    h1 { font-size: 22px; margin-bottom: 8px; color: #1a1a2e; }
+    h2 { font-size: 18px; margin-bottom: 12px; color: #1a1a2e; }
+    h3 { font-size: 15px; margin-bottom: 8px; color: #1a1a2e; }
+    p.subtitle { color: #666; margin-bottom: 20px; font-size: 13px; }
+    .form-group { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #444; margin-bottom: 5px; }
+    input, select { width: 100%; padding: 9px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
+    input:focus { outline: none; border-color: #4f46e5; }
+    button { width: 100%; padding: 10px; background: #4f46e5; color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 6px; }
+    button:hover { background: #4338ca; }
+    button:disabled { background: #a5a5a5; cursor: not-allowed; }
+    .btn-sm { width: auto; padding: 7px 14px; font-size: 12px; margin-top: 0; }
+    .btn-secondary { background: #e5e7eb; color: #333; }
+    .btn-secondary:hover { background: #d1d5db; }
+    .error { color: #dc2626; font-size: 12px; margin-top: 6px; display: none; }
+    .error.show { display: block; }
+    .link { text-align: center; margin-top: 14px; font-size: 12px; }
+    .link a { color: #4f46e5; text-decoration: none; cursor: pointer; }
+    .hidden { display: none; }
+    .steps { display: flex; gap: 3px; margin-bottom: 20px; }
+    .step { flex: 1; height: 4px; background: #e5e7eb; border-radius: 2px; }
+    .step.active { background: #4f46e5; }
+    .step.done { background: #16a34a; }
+    .option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .option-card { border: 2px solid #e5e7eb; border-radius: 8px; padding: 14px; text-align: center; cursor: pointer; transition: all 0.2s; }
+    .option-card:hover { border-color: #4f46e5; }
+    .option-card.disabled { opacity: 0.5; cursor: not-allowed; }
+    .option-card .name { font-weight: 600; font-size: 13px; }
+    .option-card .badge { font-size: 10px; margin-top: 3px; color: #666; }
+    .option-card .badge.coming-soon { color: #f59e0b; }
+    .logo { font-size: 22px; font-weight: 800; color: #4f46e5; }
+    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .status-badge.completed { background: #dcfce7; color: #16a34a; }
+    .status-badge.processing { background: #e0e7ff; color: #4f46e5; }
+    .status-badge.failed { background: #fee2e2; color: #dc2626; }
+    .status-badge.active { background: #dcfce7; color: #16a34a; }
+    /* Sidebar layout */
+    .app-layout { display: flex; min-height: 100vh; }
+    .sidebar { width: 220px; background: #1a1a2e; color: #fff; padding: 20px 0; flex-shrink: 0; }
+    .sidebar .logo { padding: 0 20px; margin-bottom: 30px; color: #fff; }
+    .sidebar-nav { list-style: none; }
+    .sidebar-nav li { padding: 10px 20px; font-size: 13px; cursor: pointer; color: #a0a0b0; transition: all 0.2s; }
+    .sidebar-nav li:hover { background: rgba(255,255,255,0.05); color: #fff; }
+    .sidebar-nav li.active { background: rgba(79,70,229,0.2); color: #fff; border-left: 3px solid #4f46e5; }
+    .sidebar-nav .nav-section { padding: 16px 20px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #555; font-weight: 600; cursor: default; }
+    .sidebar-nav .nav-section:hover { background: transparent; color: #555; }
+    .sidebar-footer { position: absolute; bottom: 20px; padding: 0 20px; font-size: 12px; color: #666; }
+    .main-content { flex: 1; padding: 24px 32px; overflow-y: auto; }
+    .main-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .main-header h1 { margin-bottom: 0; }
+    /* Timeline */
+    .timeline { position: relative; padding-left: 24px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: #e5e7eb; }
+    .timeline-item { position: relative; margin-bottom: 16px; padding: 12px 16px; background: #fff; border-radius: 8px; border: 1px solid #e5e7eb; }
+    .timeline-item::before { content: ''; position: absolute; left: -20px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: #e5e7eb; }
+    .timeline-item.completed::before { background: #16a34a; }
+    .timeline-item.processing::before { background: #4f46e5; }
+    .timeline-item.failed::before { background: #dc2626; }
+    .timeline-item .stage-name { font-weight: 600; font-size: 13px; }
+    .timeline-item .stage-time { font-size: 11px; color: #666; margin-top: 2px; }
+    .timeline-item .stage-data { font-size: 12px; color: #444; margin-top: 6px; background: #f9fafb; padding: 8px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; }
+    /* Stats grid */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: #fff; border-radius: 8px; padding: 16px; border: 1px solid #e5e7eb; }
+    .stat-card .stat-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card .stat-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+    /* Job list */
+    .job-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; }
+    .job-row:hover { border-color: #4f46e5; }
+    .job-row .job-info { font-size: 13px; }
+    .job-row .job-stage { font-size: 11px; color: #666; }
+    .job-row .job-time { font-size: 11px; color: #999; }
+    /* Health */
+    .health-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; }
+    .health-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .health-dot.healthy { background: #16a34a; }
+    .health-dot.unhealthy { background: #dc2626; }
+    .health-dot.unconfigured { background: #d1d5db; }
+    .health-dot.loading { background: #4f46e5; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* Pipeline animations */
+    @keyframes slideIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes progressPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(79,70,229,0.3); } 50% { box-shadow: 0 0 0 6px rgba(79,70,229,0); } }
+    @keyframes dotBounce { 0%,80%,100% { transform: scale(0); } 40% { transform: scale(1); } }
+    .timeline-item { animation: slideIn 0.3s ease-out; }
+    .timeline-item.processing { border-color: #4f46e5; animation: slideIn 0.3s ease-out, progressPulse 2s infinite; }
+    .timeline-item.processing::before { animation: spin 1.5s linear infinite; border: 2px solid #e5e7eb; border-top-color: #4f46e5; background: transparent; }
+    .timeline-item.completed::before { animation: fadeIn 0.3s ease-out; }
+    .pipeline-live-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #4f46e5; font-weight: 600; }
+    .pipeline-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4f46e5; animation: progressPulse 1.5s infinite; }
+    .pipeline-spinner { width: 14px; height: 14px; border: 2px solid #e5e7eb; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
+    .dots-loading span { display: inline-block; width: 5px; height: 5px; margin: 0 2px; background: #4f46e5; border-radius: 50%; animation: dotBounce 1.4s infinite ease-in-out both; }
+    .dots-loading span:nth-child(1) { animation-delay: -0.32s; }
+    .dots-loading span:nth-child(2) { animation-delay: -0.16s; }
+    .job-row { transition: all 0.2s ease; }
+    .job-row.processing { border-color: #4f46e5; background: #f8f7ff; }
+    .job-row.processing .job-info { color: #4f46e5; }
+    .stage-progress-bar { height: 3px; background: #e5e7eb; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .stage-progress-bar .fill { height: 100%; background: #4f46e5; border-radius: 2px; transition: width 0.5s ease; }
+    .stat-card { transition: all 0.3s ease; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+
+    /* Toast notifications */
+    .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+    .toast { padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.15); animation: toastIn 0.3s ease-out; max-width: 360px; display: flex; align-items: center; gap: 8px; }
+    .toast.success { background: #16a34a; }
+    .toast.error { background: #dc2626; }
+    .toast.info { background: #4f46e5; }
+    .toast.warning { background: #d97706; }
+    .toast.fade-out { animation: toastOut 0.3s ease-in forwards; }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(8px); } }
+
+    /* Empty states */
+    .empty-state { text-align: center; padding: 48px 24px; }
+    .empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.4; }
+    .empty-state h3 { font-size: 16px; margin-bottom: 8px; color: #374151; }
+    .empty-state p { font-size: 13px; color: #666; margin-bottom: 16px; max-width: 400px; margin-left: auto; margin-right: auto; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .sidebar { width: 60px; overflow: hidden; }
+      .sidebar .logo { font-size: 14px; padding: 0 8px; }
+      .sidebar-nav li { padding: 10px 8px; font-size: 11px; text-align: center; }
+      .sidebar-nav .nav-section { display: none; }
+      .main-content { padding: 16px; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <!-- AUTH PAGES -->
+  <div class="auth-container" id="auth-container">
+    <div class="logo" style="text-align:center; margin-bottom:24px;">RelayOS</div>
+    <div id="page-login" class="card">
+      <h1>Welcome back</h1>
+      <p class="subtitle">Sign in to your account</p>
+      <div class="form-group"><label>Email</label><input type="email" id="login-email" placeholder="you@company.com"></div>
+      <div class="form-group"><label>Password</label><input type="password" id="login-password" placeholder="Enter password"></div>
+      <div class="error" id="login-error"></div>
+      <button onclick="doLogin()">Sign In</button>
+      <div class="link"><a onclick="showPage('register')">Don't have an account? Register</a></div>
+    </div>
+    <div id="page-register" class="card hidden">
+      <h1>Create account</h1>
+      <p class="subtitle">Start your order fulfillment journey</p>
+      <div class="form-group"><label>Email</label><input type="email" id="reg-email" placeholder="you@company.com"></div>
+      <div class="form-group"><label>Password</label><input type="password" id="reg-password" placeholder="Min 8 characters"></div>
+      <div class="form-group"><label>Confirm Password</label><input type="password" id="reg-confirm" placeholder="Re-enter password"></div>
+      <div class="error" id="reg-error"></div>
+      <button onclick="doRegister()">Create Account</button>
+      <div class="link"><a onclick="showPage('login')">Already have an account? Sign in</a></div>
+    </div>
+    <div id="page-onboarding" class="card hidden">
+      <div class="steps"><div class="step" id="step-1"></div><div class="step" id="step-2"></div><div class="step" id="step-3"></div><div class="step" id="step-4"></div><div class="step" id="step-5"></div></div>
+      <div id="onboarding-content"></div>
+      <div class="error" id="onboarding-error"></div>
+    </div>
+  </div>
+
+  <!-- DASHBOARD WITH SIDEBAR -->
+  <div class="app-layout hidden" id="app-layout">
+    <aside class="sidebar">
+      <div class="logo">RelayOS</div>
+      <ul class="sidebar-nav">
+        <li class="nav-section">Operations</li>
+        <li class="active" onclick="switchTab('overview')">Overview</li>
+        <li onclick="switchTab('pipeline')">Pipeline</li>
+        <li onclick="switchTab('fulfillment')">Fulfillment</li>
+        <li onclick="switchTab('customers')">Customers</li>
+        <li class="nav-section">AI & Messaging</li>
+        <li onclick="switchTab('agents')">Agents</li>
+        <li onclick="switchTab('caretaker')">Caretaker</li>
+        <li onclick="switchTab('whatsapp')">WhatsApp</li>
+        <li onclick="switchTab('inbox')">Inbox</li>
+        <li class="nav-section">Configuration</li>
+        <li onclick="switchTab('knowledge')">Knowledge</li>
+        <li onclick="switchTab('settings')">Settings</li>
+        <li class="nav-section">System</li>
+        <li onclick="switchTab('health')">Health</li>
+      </ul>
+    </aside>
+    <main class="main-content">
+      <div class="main-header">
+        <h1 id="page-title">Overview</h1>
+        <button class="btn-sm btn-secondary" onclick="doLogout()">Sign Out</button>
+      </div>
+      <div id="tab-content"></div>
+    </main>
+  </div>
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+  <script>
+    const API = '';
+    let token = localStorage.getItem('token');
+    let currentTab = 'overview';
+    let pipelineJobs = [];
+
+    // Toast notification system
+    function toast(message, type = 'info', duration = 3500) {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      el.className = 'toast ' + type;
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => { el.classList.add('fade-out'); setTimeout(() => el.remove(), 300); }, duration);
+    }
+
+    function showPage(page) {
+      document.getElementById('auth-container').classList.remove('hidden');
+      document.getElementById('app-layout').classList.add('hidden');
+      document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
+      document.getElementById('page-' + page).classList.remove('hidden');
+    }
+    function showApp() {
+      document.getElementById('auth-container').classList.add('hidden');
+      document.getElementById('app-layout').classList.remove('hidden');
+    }
+    function showError(id, msg) {
+      const el = document.getElementById(id);
+      el.textContent = msg; el.classList.add('show');
+      setTimeout(() => el.classList.remove('show'), 5000);
+    }
+    async function api(method, path, body) {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(API + path, opts);
+      const data = await res.json();
+      // Auto-logout on 401
+      if (res.status === 401) {
+        token = null;
+        localStorage.removeItem('token');
+        showPage('login');
+      }
+      return { status: res.status, data };
+    }
+    async function doRegister() {
+      const email = document.getElementById('reg-email').value;
+      const password = document.getElementById('reg-password').value;
+      const confirm_password = document.getElementById('reg-confirm').value;
+      const { data } = await api('POST', '/auth/register', { email, password, confirm_password });
+      if (!data.success) return showError('reg-error', data.error.message);
+      const login = await api('POST', '/auth/login', { email, password });
+      if (login.data.success) { token = login.data.data.token; localStorage.setItem('token', token); loadOnboarding(); }
+    }
+    async function doLogin() {
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+      const { data } = await api('POST', '/auth/login', { email, password });
+      if (!data.success) return showError('login-error', data.error.message);
+      token = data.data.token; localStorage.setItem('token', token);
+      if (data.data.tenant.status === 'active') loadDashboard(); else loadOnboarding();
+    }
+    function doLogout() { token = null; localStorage.removeItem('token'); showPage('login'); }
+    async function loadOnboarding() {
+      showPage('onboarding');
+      const { data } = await api('GET', '/onboarding/status');
+      if (!data.success) return showPage('login');
+      if (data.data.status === 'active') return loadDashboard();
+      renderOnboardingStep(data.data);
+    }
+    function renderOnboardingStep(s) {
+      const steps = ['ecommerce_platform_selected','ecommerce_integration_configured','courier_selected','courier_configured','completed'];
+      const idx = steps.indexOf(s.onboarding_step);
+      for (let i=0;i<5;i++) { document.getElementById('step-'+(i+1)).className='step'+(i<idx?' done':i===idx||(idx===-1&&i===0)?' active':''); }
+      const c = document.getElementById('onboarding-content');
+      const skippedEnrichment = localStorage.getItem('skipped_enrichment') === 'true';
+      if (!s.ecommerce_platform||s.onboarding_step==='account_created') c.innerHTML=renderPlatformSelection();
+      else if (s.ecommerce_platform==='shopify'&&!s.shopify_plan) c.innerHTML=renderShopifyPlanSelection();
+      else if (!s.ecommerce_configured) c.innerHTML=s.shopify_plan==='basic'?renderImapForm():renderShopifyApiForm();
+      else if (s.shopify_plan==='basic' && !skippedEnrichment && !window._shopifyApiConfigured) {
+        // Optional Shopify enrichment for Basic plan
+        c.innerHTML = renderShopifyBasicEnrichmentPrompt();
+      }
+      else if (!s.courier) c.innerHTML=renderCourierSelection();
+      else if (!s.courier_configured) c.innerHTML=renderPudoForm();
+      else c.innerHTML=renderComplete();
+    }
+    function skipShopifyEnrichment() {
+      localStorage.setItem('skipped_enrichment', 'true');
+      loadOnboarding();
+    }
+    function renderPlatformSelection(){return '<h2>Choose ecommerce platform</h2><div class="option-grid"><div class="option-card" onclick="selectPlatform(\'shopify\')"><div class="name">Shopify</div><div class="badge">Active</div></div><div class="option-card disabled" onclick="selectPlatform(\'woocommerce\')"><div class="name">WooCommerce</div><div class="badge coming-soon">Coming Soon</div></div></div>';}
+    function renderShopifyPlanSelection(){return '<h2>Shopify plan</h2><div class="option-grid"><div class="option-card" onclick="selectPlan(\'basic\')"><div class="name">Basic</div><div class="badge">Email</div></div><div class="option-card" onclick="selectPlan(\'grow\')"><div class="name">Grow</div><div class="badge">API</div></div><div class="option-card" onclick="selectPlan(\'advanced\')"><div class="name">Advanced</div><div class="badge">API</div></div><div class="option-card" onclick="selectPlan(\'plus\')"><div class="name">Plus</div><div class="badge">API</div></div></div>';}
+    function renderImapForm(){return '<h2>IMAP Settings</h2><p class="subtitle">For Shopify order email ingestion</p><div class="form-group"><label>Host</label><input id="imap-host" placeholder="imap.gmail.com"></div><div class="form-group"><label>Port</label><input id="imap-port" value="993" type="number"></div><div class="form-group"><label>Username</label><input id="imap-user"></div><div class="form-group"><label>Password</label><input id="imap-pass" type="password"></div><div class="form-group"><label>Mailbox</label><input id="imap-mailbox" value="INBOX"></div><button onclick="saveImapSettings()">Save and Continue</button>';}
+    function renderShopifyApiForm(){return '<h2>Shopify API</h2><p class="subtitle">Required for Grow/Advanced/Plus. Optional for Basic to enrich orders with full Shopify data.</p><div class="form-group"><label>Store URL</label><input id="shopify-store" placeholder="yourstore.myshopify.com"></div><div class="form-group"><label>Access Token</label><input id="shopify-token" type="password"></div><button onclick="saveShopifyApi()">Save</button>';}
+    function renderShopifyBasicEnrichmentPrompt(){return '<h2>Optional: Shopify API Enrichment</h2><p class="subtitle">Connect your Shopify API to enrich orders with line items, customer details, and full address data. You can skip this and add it later in Settings.</p><div class="form-group"><label>Store URL</label><input id="shopify-store" placeholder="yourstore.myshopify.com"></div><div class="form-group"><label>Access Token</label><input id="shopify-token" type="password" placeholder="shpat_..."></div><div style="display:flex; gap:8px;"><button onclick="saveShopifyApi()">Save and Continue</button><button class="btn-secondary" onclick="skipShopifyEnrichment()">Skip</button></div>';}
+    function renderCourierSelection(){return '<h2>Choose courier</h2><div class="option-grid"><div class="option-card" onclick="selectCourier(\'pudo\')"><div class="name">PUDO</div><div class="badge">Active</div></div><div class="option-card disabled" onclick="selectCourier(\'the_courier_guy\')"><div class="name">The Courier Guy</div><div class="badge coming-soon">Coming Soon</div></div><div class="option-card disabled" onclick="selectCourier(\'dhl\')"><div class="name">DHL</div><div class="badge coming-soon">Coming Soon</div></div><div class="option-card disabled" onclick="selectCourier(\'aramex\')"><div class="name">Aramex</div><div class="badge coming-soon">Coming Soon</div></div></div>';}
+    function renderPudoForm(){return '<h2>PUDO Credentials</h2><div class="form-group"><label>Email</label><input id="pudo-user"></div><div class="form-group"><label>Password</label><input id="pudo-pass" type="password"></div><div class="form-group"><label>API Key</label><input id="pudo-key" type="password"></div><button onclick="savePudoSettings()">Save</button>';}
+    function renderComplete(){return '<h2>Ready</h2><p class="subtitle">All configured. Activate your account.</p><button onclick="completeOnboarding()">Complete Onboarding</button>';}
+    async function selectPlatform(p){const{data}=await api('POST','/onboarding/ecommerce-platform',{platform:p});if(!data.success)return showError('onboarding-error',data.error?.message);if(data.data.platform_status==='coming_soon')return showError('onboarding-error',data.data.message);loadOnboarding();}
+    async function selectPlan(p){const{data}=await api('POST','/onboarding/shopify-plan',{plan:p});if(!data.success)return showError('onboarding-error',data.error.message);loadOnboarding();}
+    async function saveImapSettings(){const b={imap_host:document.getElementById('imap-host').value,imap_port:document.getElementById('imap-port').value,imap_username:document.getElementById('imap-user').value,imap_password:document.getElementById('imap-pass').value,imap_mailbox:document.getElementById('imap-mailbox').value};const{data}=await api('POST','/onboarding/shopify-basic/imap-settings',b);if(!data.success)return showError('onboarding-error',data.error.message);loadOnboarding();}
+    async function saveShopifyApi(){
+      const b={shopify_store:document.getElementById('shopify-store').value,shopify_access_token:document.getElementById('shopify-token').value};
+      const{data}=await api('POST','/onboarding/shopify-api/settings',b);
+      if(!data.success)return showError('onboarding-error',data.error.message);
+      window._shopifyApiConfigured = true;
+      localStorage.setItem('skipped_enrichment', 'true');
+      loadOnboarding();
+    }
+    async function selectCourier(c){const{data}=await api('POST','/onboarding/courier',{courier:c});if(!data.success)return showError('onboarding-error',data.error?.message);if(data.data.courier_status==='coming_soon')return showError('onboarding-error',data.data.message);loadOnboarding();}
+    async function savePudoSettings(){const b={pudo_username:document.getElementById('pudo-user').value,pudo_password:document.getElementById('pudo-pass').value,pudo_api_key:document.getElementById('pudo-key').value};const{data}=await api('POST','/onboarding/courier/pudo-settings',b);if(!data.success)return showError('onboarding-error',data.error.message);loadOnboarding();}
+    async function completeOnboarding(){const{data}=await api('POST','/onboarding/complete');if(!data.success)return showError('onboarding-error',data.error.message);loadDashboard();}
+    // Dashboard
+    async function loadDashboard() {
+      showApp();
+      switchTab('overview');
+    }
+    function switchTab(tab) {
+      currentTab = tab;
+      document.getElementById('page-title').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
+      document.querySelectorAll('.sidebar-nav li').forEach(li => li.classList.remove('active'));
+      document.querySelectorAll('.sidebar-nav li:not(.nav-section)').forEach(li => { if(li.textContent.toLowerCase()===tab) li.classList.add('active'); });
+      if (tab === 'overview') renderOverview();
+      else if (tab === 'pipeline') renderPipeline();
+      else if (tab === 'fulfillment') renderFulfillment();
+      else if (tab === 'agents') renderAgents();
+      else if (tab === 'caretaker') renderCaretaker();
+      else if (tab === 'whatsapp') renderWhatsApp();
+      else if (tab === 'inbox') renderInbox();
+      else if (tab === 'knowledge') renderKnowledge();
+      else if (tab === 'customers') renderCustomers();
+      else if (tab === 'health') renderHealth();
+      else if (tab === 'settings') renderSettings();
+    }
+    async function renderOverview() {
+      const [statusRes, statsRes, eventsRes, fulfillRes] = await Promise.all([
+        api('GET','/onboarding/status'),
+        api('GET','/pipeline/stats'),
+        api('GET','/pipeline/jobs?limit=8'),
+        api('GET','/fulfillment/jobs?limit=5'),
+      ]);
+      const s = statusRes.data.success ? statusRes.data.data : {};
+      const st = statsRes.data.success ? statsRes.data.data : {total:0,by_status:{}};
+      const recentJobs = eventsRes.data.success ? eventsRes.data.data.jobs : [];
+      const fulfillJobs = fulfillRes.data.success ? fulfillRes.data.data.jobs : [];
+
+      let html = '';
+
+      // Key metrics row
+      html += '<div class="stats-grid">';
+      html += `<div class="stat-card"><div class="stat-label">Pipeline Total</div><div class="stat-value">${st.total}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value" style="color:#16a34a;">${st.by_status.completed||0}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Processing</div><div class="stat-value" style="color:#4f46e5;">${st.by_status.processing||0}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value" style="color:#dc2626;">${st.by_status.failed||0}</div></div>`;
+      html += '</div>';
+
+      // Two-column layout: Activity feed + System status
+      html += '<div style="display:grid; grid-template-columns:2fr 1fr; gap:20px;">';
+
+      // Left: Recent activity
+      html += '<div class="card" style="padding:20px;"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;"><h3 style="margin:0;">Recent Activity</h3><button class="btn-sm btn-secondary" onclick="switchTab(\'pipeline\')">View all</button></div>';
+      if (recentJobs.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">~</div><h3>No activity yet</h3><p>Send an order email to trigger the pipeline. Activity will appear here in real time.</p></div>';
+      } else {
+        recentJobs.forEach(j => {
+          const time = new Date(j.created_at).toLocaleString();
+          const stage = j.current_stage.replace(/_/g, ' ').toLowerCase();
+          const cls = j.status === 'completed' ? 'completed' : j.status === 'failed' ? 'failed' : 'processing';
+          html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #f3f4f6;">`;
+          html += `<div><div style="font-size:13px; font-weight:500;">${stage}</div><div style="font-size:11px; color:#666;">${time}</div></div>`;
+          html += `<span class="status-badge ${cls}">${j.status}</span>`;
+          html += `</div>`;
+        });
+      }
+      html += '</div>';
+
+      // Right: System status panel
+      html += '<div>';
+
+      // Tenant info card
+      html += '<div class="card" style="padding:16px; margin-bottom:12px;">';
+      html += '<h3 style="margin-bottom:10px;">Account</h3>';
+      html += `<div style="font-size:12px; display:grid; gap:6px;">`;
+      html += `<div style="display:flex; justify-content:space-between;"><span style="color:#666;">Status</span><span class="status-badge active">${s.status||'-'}</span></div>`;
+      html += `<div style="display:flex; justify-content:space-between;"><span style="color:#666;">Platform</span><strong>${s.ecommerce_platform||'-'}</strong></div>`;
+      html += `<div style="display:flex; justify-content:space-between;"><span style="color:#666;">Plan</span><strong>${s.shopify_plan||'-'}</strong></div>`;
+      html += `<div style="display:flex; justify-content:space-between;"><span style="color:#666;">Courier</span><strong>${(s.courier||'-').toUpperCase()}</strong></div>`;
+      html += `</div></div>`;
+
+      // Agent health mini-panel
+      html += '<div class="card" style="padding:16px; margin-bottom:12px;">';
+      html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><h3 style="margin:0;">Agents</h3><button class="btn-sm btn-secondary" onclick="switchTab(\'agents\')">Details</button></div>';
+      const agentList = [
+        { name: 'Data Extraction', active: true },
+        { name: 'Caretaker AI', active: true },
+        { name: 'Intent Router', active: true },
+        { name: 'Order Support', active: true },
+        { name: 'Tenant Info', active: true },
+      ];
+      agentList.forEach(a => {
+        html += `<div style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:12px;">`;
+        html += `<span class="health-dot ${a.active ? 'healthy' : 'unconfigured'}"></span>`;
+        html += `<span>${a.name}</span>`;
+        html += `</div>`;
+      });
+      html += '</div>';
+
+      // Fulfillment summary
+      html += '<div class="card" style="padding:16px;">';
+      html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><h3 style="margin:0;">Fulfillment</h3><button class="btn-sm btn-secondary" onclick="switchTab(\'fulfillment\')">View</button></div>';
+      if (fulfillJobs.length === 0) {
+        html += '<p style="font-size:12px; color:#666;">No active fulfillment jobs</p>';
+      } else {
+        fulfillJobs.slice(0, 4).forEach(j => {
+          const milestone = (j.milestone || 'pending').replace(/_/g, ' ');
+          const cls = j.milestone === 'delivered' ? 'completed' : j.milestone === 'cancelled' || j.milestone === 'failed' ? 'failed' : 'processing';
+          html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; font-size:12px;">`;
+          html += `<span>${j.waybill || '-'}</span>`;
+          html += `<span class="status-badge ${cls}">${milestone}</span>`;
+          html += `</div>`;
+        });
+      }
+      html += '</div>';
+
+      html += '</div>'; // right column
+      html += '</div>'; // grid
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+    async function renderPipeline() {
+      const { data } = await api('GET', '/pipeline/jobs?limit=20');
+      if (!data.success) { document.getElementById('tab-content').innerHTML = '<p>Failed to load</p>'; return; }
+      pipelineJobs = data.data.jobs;
+      const hasProcessing = pipelineJobs.some(j => j.status === 'processing');
+      let html = '<div style="display:flex; gap:20px;">';
+      html += '<div style="flex:1; max-width:320px;">';
+      html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
+      html += '<h3>Recent Jobs</h3>';
+      if (hasProcessing) {
+        html += '<span class="pipeline-live-indicator"><span class="pipeline-live-dot"></span>Live</span>';
+      }
+      html += '</div>';
+      if (pipelineJobs.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">~</div><h3>No pipeline jobs yet</h3><p>Send an order notification email to your configured inbox. The pipeline will process it automatically and show progress here.</p></div>';
+      } else {
+        pipelineJobs.forEach((job, i) => {
+          const time = new Date(job.created_at).toLocaleString();
+          const stage = job.current_stage.replace(/_/g, ' ');
+          const isProcessing = job.status === 'processing';
+          html += `<div class="job-row ${job.status}" onclick="showJobDetail(${i})" style="animation-delay:${i*50}ms">`;
+          html += `<div><div class="job-info">${isProcessing ? '<span class="pipeline-spinner"></span> ' : ''}${stage}</div><div class="job-time">${time}</div></div>`;
+          html += `<span class="status-badge ${job.status}">${job.status}</span>`;
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+      html += '<div style="flex:2;" id="job-detail-panel"><p style="color:#666; font-size:13px;">Select a job to view its timeline</p></div>';
+      html += '</div>';
+      document.getElementById('tab-content').innerHTML = html;
+      // Auto-refresh if processing — only refresh the job list, not the detail panel
+      if (hasProcessing) { clearTimeout(window._pipelineTimer); window._pipelineTimer = setTimeout(() => { if (currentTab === 'pipeline') refreshJobList(); }, 3000); }
+    }
+
+    async function refreshJobList() {
+      const { data } = await api('GET', '/pipeline/jobs?limit=20');
+      if (!data.success) return;
+      pipelineJobs = data.data.jobs;
+      const hasProcessing = pipelineJobs.some(j => j.status === 'processing');
+      // Only re-render if still on pipeline tab and no detail is open
+      if (currentTab === 'pipeline' && hasProcessing) {
+        clearTimeout(window._pipelineTimer);
+        window._pipelineTimer = setTimeout(() => { if (currentTab === 'pipeline') refreshJobList(); }, 3000);
+      }
+    }
+
+    async function showJobDetail(index) {
+      const job = pipelineJobs[index];
+      const { data } = await api('GET', '/pipeline/jobs/' + job.id);
+      if (!data.success) return;
+      const stages = data.data.stages;
+      const allStages = ['EMAIL RECEIVED','EMAIL NORMALIZED','DATA EXTRACTED','DATA VALIDATED','SHOPIFY ENRICHED','LOCATION RESOLVED','CUSTOMER DATA','LOCKERS RESOLVED','COURIER READY','PAYLOAD CREATED'];
+      const completedStages = stages.map(s => s.stage.replace(/_/g, ' '));
+      const currentStageIdx = allStages.indexOf(job.current_stage.replace(/_/g, ' '));
+      const progress = Math.round(((currentStageIdx + 1) / allStages.length) * 100);
+
+      let html = '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">';
+      html += '<h3>Pipeline Timeline</h3>';
+      if (job.status === 'processing') {
+        html += '<span class="pipeline-live-indicator"><span class="pipeline-spinner"></span>Processing</span>';
+      } else if (job.status === 'completed') {
+        html += '<span class="status-badge completed">Completed</span>';
+      } else if (job.status === 'failed') {
+        html += '<span class="status-badge failed">Failed</span>';
+      }
+      html += '</div>';
+
+      // Progress bar
+      html += `<div class="stage-progress-bar"><div class="fill" style="width:${progress}%"></div></div>`;
+      html += `<div style="font-size:11px; color:#666; margin:4px 0 16px; text-align:right;">${currentStageIdx + 1} of ${allStages.length} stages</div>`;
+
+      html += '<div class="timeline">';
+      // Show completed stages
+      stages.forEach((stage, i) => {
+        const time = new Date(stage.created_at).toLocaleString();
+        const name = stage.stage.replace(/_/g, ' ');
+        let outputStr = '';
+        if (stage.output_data) {
+          try {
+            const out = typeof stage.output_data === 'string' ? JSON.parse(stage.output_data) : stage.output_data;
+            outputStr = JSON.stringify(out, null, 2);
+          } catch(e) { outputStr = String(stage.output_data); }
+        }
+        html += `<div class="timeline-item ${stage.status}" style="animation-delay:${i*80}ms">`;
+        html += `<div class="stage-name">${name}</div>`;
+        html += `<div class="stage-time">${time} - ${stage.status}</div>`;
+        if (outputStr) html += `<div class="stage-data">${escapeHtml(outputStr)}</div>`;
+        if (stage.error_message) html += `<div class="stage-data" style="color:#dc2626;">${escapeHtml(stage.error_message)}</div>`;
+        html += '</div>';
+      });
+
+      // Show pending stages (not yet reached)
+      if (job.status === 'processing') {
+        const nextIdx = currentStageIdx + 1;
+        for (let i = nextIdx; i < allStages.length; i++) {
+          html += `<div class="timeline-item" style="opacity:0.4; animation-delay:${(stages.length + i - nextIdx)*80}ms">`;
+          html += `<div class="stage-name">${allStages[i]}</div>`;
+          html += `<div class="stage-time">Pending <span class="dots-loading"><span></span><span></span><span></span></span></div>`;
+          html += '</div>';
+        }
+      }
+
+      html += '</div>';
+      document.getElementById('job-detail-panel').innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    async function renderCustomers() {
+      const { data } = await api('GET', '/customers');
+      if (!data.success) { document.getElementById('tab-content').innerHTML = '<p>Failed to load</p>'; return; }
+      const customers = data.data.customers;
+      const total = data.data.total;
+
+      let html = `<div style="margin-bottom:16px; font-size:13px; color:#666;">${total} customers total</div>`;
+      html += '<div style="display:flex; gap:20px;">';
+      html += '<div style="flex:1; max-width:360px;">';
+
+      if (customers.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No customers yet. Orders will create customer profiles automatically.</p>';
+      } else {
+        customers.forEach((c, i) => {
+          const lastOrder = c.last_order_at ? new Date(c.last_order_at).toLocaleDateString() : '-';
+          html += `<div class="job-row" onclick="showCustomerDetail('${c.id}')">`;
+          html += `<div><div class="job-info">${c.name || 'Unknown'}</div>`;
+          html += `<div class="job-stage">${c.phone}</div>`;
+          html += `<div class="job-time">${c.order_count} order${c.order_count !== 1 ? 's' : ''} | Last: ${lastOrder}</div></div>`;
+          html += '</div>';
+        });
+      }
+
+      html += '</div>';
+      html += '<div style="flex:2;" id="customer-detail-panel"><p style="color:#666; font-size:13px;">Select a customer to view their order history</p></div>';
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function showCustomerDetail(customerId) {
+      const { data } = await api('GET', '/customers/' + customerId);
+      if (!data.success) return;
+      const customer = data.data.customer;
+      const orders = data.data.orders;
+
+      let html = `<h3 style="margin-bottom:4px;">${customer.name || 'Unknown'}</h3>`;
+      html += `<div style="font-size:12px; color:#666; margin-bottom:16px;">${customer.phone} ${customer.email ? '| ' + customer.email : ''}</div>`;
+
+      html += '<div class="stats-grid">';
+      html += `<div class="stat-card"><div class="stat-label">Total Orders</div><div class="stat-value">${customer.order_count}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">First Order</div><div class="stat-value" style="font-size:13px;">${customer.first_order_at ? new Date(customer.first_order_at).toLocaleDateString() : '-'}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Last Order</div><div class="stat-value" style="font-size:13px;">${customer.last_order_at ? new Date(customer.last_order_at).toLocaleDateString() : '-'}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Customer Since</div><div class="stat-value" style="font-size:13px;">${new Date(customer.created_at).toLocaleDateString()}</div></div>`;
+      html += '</div>';
+
+      html += '<h3 style="margin-bottom:12px;">Order History</h3>';
+      if (orders.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No orders found.</p>';
+      } else {
+        html += '<div class="timeline">';
+        orders.forEach((o, i) => {
+          const time = new Date(o.created_at).toLocaleString();
+          const isDelivered = o.status === 'delivered';
+          const isFailed = o.status === 'cancelled' || o.status === 'failed';
+          const cssClass = isDelivered ? 'completed' : isFailed ? 'failed' : 'processing';
+          html += `<div class="timeline-item ${cssClass}" style="animation-delay:${i*60}ms">`;
+          html += `<div class="stage-name">Order #${o.order_number} - ${o.delivery_method || ''}</div>`;
+          html += `<div class="stage-time">${time} | ${o.waybill || 'No waybill'} | ${o.status}</div>`;
+          if (o.shopify_fulfillment_status) html += `<div style="font-size:11px; margin-top:4px;">Shopify: ${o.shopify_fulfillment_status}</div>`;
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
+      document.getElementById('customer-detail-panel').innerHTML = html;
+    }
+
+    async function renderHealth() {
+      let html = '<h3 style="margin-bottom:16px;">Integration Health Checks</h3>';
+      html += '<button class="btn-sm" onclick="runHealthChecks()" id="health-btn" style="margin-bottom:16px;">Run Checks</button>';
+      html += '<div id="health-results">';
+      ['imap','pudo_api_key','pudo_login'].forEach(svc => {
+        const label = svc === 'imap' ? 'IMAP Connection' : svc === 'pudo_api_key' ? 'PUDO API Key' : 'PUDO Login';
+        html += `<div class="health-row"><div class="health-dot unconfigured" id="hdot-${svc}"></div><div><div style="font-weight:600; font-size:13px;">${label}</div><div style="font-size:11px; color:#666;" id="hmsg-${svc}">Not checked</div></div></div>`;
+      });
+      html += '</div>';
+      document.getElementById('tab-content').innerHTML = html;
+    }
+    async function runHealthChecks() {
+      const btn = document.getElementById('health-btn');
+      btn.disabled = true; btn.textContent = 'Checking...';
+      ['imap','pudo_api_key','pudo_login'].forEach(svc => {
+        document.getElementById('hdot-'+svc).className = 'health-dot loading';
+        document.getElementById('hmsg-'+svc).textContent = 'Checking...';
+      });
+      const { data } = await api('POST', '/health/check');
+      btn.disabled = false; btn.textContent = 'Run Checks';
+      if (!data.success) return;
+      data.data.checks.forEach(c => {
+        const dot = document.getElementById('hdot-'+c.service);
+        const msg = document.getElementById('hmsg-'+c.service);
+        if (!dot||!msg) return;
+        dot.className = 'health-dot ' + c.status;
+        msg.textContent = c.message;
+      });
+    }
+
+    async function renderSettings() {
+      const [imapRes, pudoRes, shopifyApiRes, collectionRes] = await Promise.all([
+        api('GET', '/settings/imap'),
+        api('GET', '/settings/pudo'),
+        api('GET', '/settings/shopify-api'),
+        api('GET', '/settings/collection-contact'),
+      ]);
+
+      const imap = imapRes.data.success ? imapRes.data.data : { configured: false };
+      const pudo = pudoRes.data.success ? pudoRes.data.data : { configured: false };
+      const shopify = shopifyApiRes.data.success ? shopifyApiRes.data.data : { configured: false };
+      const collection = collectionRes.data.success ? collectionRes.data.data : { configured: false };
+
+      let html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">';
+
+      // IMAP card
+      html += '<div class="card"><h3 style="margin-bottom:12px;">IMAP Settings</h3>';
+      if (imap.configured) {
+        html += `<div style="font-size:13px; color:#444;"><div><strong>Host:</strong> ${imap.imap_host}:${imap.imap_port}</div><div><strong>Username:</strong> ${imap.imap_username}</div><div><strong>Mailbox:</strong> ${imap.imap_mailbox}</div><div><strong>SSL:</strong> ${imap.imap_use_ssl ? 'Yes' : 'No'}</div></div>`;
+      } else {
+        html += '<div style="font-size:13px; color:#666;">Not configured</div>';
+      }
+      html += '</div>';
+
+      // PUDO card
+      html += '<div class="card"><h3 style="margin-bottom:12px;">PUDO Settings</h3>';
+      if (pudo.configured) {
+        html += `<div style="font-size:13px; color:#444;"><div><strong>Username:</strong> ${pudo.pudo_username}</div><div><strong>Password / API Key:</strong> Configured</div></div>`;
+      } else {
+        html += '<div style="font-size:13px; color:#666;">Not configured</div>';
+      }
+      html += '</div>';
+
+      // Collection Contact card (full width)
+      html += '<div class="card" style="grid-column: span 2;"><h3 style="margin-bottom:12px;">Collection Contact</h3>';
+      html += '<p class="subtitle" style="margin-bottom:14px;">Used as the sender/collection contact on all PUDO shipments.</p>';
+      if (collection.configured) {
+        html += `<div style="font-size:13px; color:#444; margin-bottom:12px;"><div><strong>Name:</strong> ${collection.contact_name}</div><div><strong>Email:</strong> ${collection.contact_email}</div><div><strong>Phone:</strong> ${collection.contact_phone}</div><div><strong>Collection Locker:</strong> ${collection.collection_terminal_id || 'Not set'}</div><div><strong>Instructions:</strong> ${collection.special_instructions || 'None'}</div></div>`;
+      }
+      html += '<div class="form-group"><label>Contact Name</label><input id="coll-name" placeholder="Your name" value="' + (collection.contact_name || '') + '"></div>';
+      html += '<div class="form-group"><label>Contact Email</label><input id="coll-email" placeholder="orders@yourstore.com" value="' + (collection.contact_email || '') + '"></div>';
+      html += '<div class="form-group"><label>Contact Phone</label><input id="coll-phone" placeholder="+27..." value="' + (collection.contact_phone || '') + '"></div>';
+      html += '<div class="form-group"><label>Collection Locker (Terminal ID)</label><input id="coll-terminal" placeholder="CG1432" value="' + (collection.collection_terminal_id || '') + '"></div>';
+      html += '<div class="form-group"><label>Special Instructions</label><input id="coll-instructions" placeholder="None" value="' + (collection.special_instructions || 'None') + '"></div>';
+      html += '<div class="error" id="coll-error"></div>';
+      html += '<button class="btn-sm" onclick="saveCollectionContact()">' + (collection.configured ? 'Update' : 'Save') + '</button>';
+      html += '</div>';
+
+      // Shopify API card (full width)
+      html += '<div class="card" style="grid-column: span 2;"><h3 style="margin-bottom:12px;">Shopify API Credentials</h3>';
+      html += '<p class="subtitle" style="margin-bottom:14px;">Optional for Basic plan (enriches orders with line items from Shopify).</p>';
+      if (shopify.configured) {
+        html += `<div style="font-size:13px; color:#444; margin-bottom:12px;"><div><strong>Store:</strong> ${shopify.shopify_store}</div><div><strong>Token:</strong> Configured (encrypted)</div></div>`;
+      }
+      html += '<div class="form-group"><label>Shopify Store</label><input id="shop-store" placeholder="yourstore.myshopify.com" value="' + (shopify.shopify_store || '') + '"></div>';
+      html += '<div class="form-group"><label>Access Token</label><input id="shop-token" type="password" placeholder="shpat_..."></div>';
+      html += '<div class="error" id="settings-error"></div>';
+      html += '<div style="display:flex; gap:8px;"><button class="btn-sm" onclick="saveShopifyApiSettings()">' + (shopify.configured ? 'Update' : 'Save') + ' Credentials</button>';
+      if (shopify.configured) {
+        html += '<button class="btn-sm btn-secondary" onclick="deleteShopifyApiSettings()">Remove</button>';
+      }
+      html += '</div>';
+      html += '</div>';
+
+      html += '</div>';
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function saveCollectionContact() {
+      const name = document.getElementById('coll-name').value;
+      const email = document.getElementById('coll-email').value;
+      const phone = document.getElementById('coll-phone').value;
+      const terminal = document.getElementById('coll-terminal').value;
+      const instructions = document.getElementById('coll-instructions').value;
+
+      if (!name || !email || !phone) {
+        return showError('coll-error', 'Name, email, and phone are required');
+      }
+
+      const { data } = await api('POST', '/settings/collection-contact', {
+        contact_name: name,
+        contact_email: email,
+        contact_phone: phone,
+        collection_terminal_id: terminal,
+        special_instructions: instructions,
+      });
+
+      if (!data.success) return showError('coll-error', data.error.message);
+      renderSettings();
+    }
+
+    async function saveShopifyApiSettings() {
+      const store = document.getElementById('shop-store').value;
+      const tokenField = document.getElementById('shop-token').value;
+
+      if (!store || !tokenField) {
+        return showError('settings-error', 'Both store and access token are required');
+      }
+
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+
+      const { data } = await api('POST', '/settings/shopify-api', {
+        shopify_store: store,
+        shopify_access_token: tokenField,
+      });
+
+      btn.disabled = false;
+
+      if (!data.success) {
+        btn.textContent = 'Save Credentials';
+        return showError('settings-error', data.error.message);
+      }
+
+      btn.textContent = 'Saved';
+      setTimeout(() => renderSettings(), 800);
+    }
+
+    async function deleteShopifyApiSettings() {
+      if (!confirm('Remove Shopify API credentials? Shopify enrichment will stop working.')) return;
+      await api('DELETE', '/settings/shopify-api');
+      renderSettings();
+    }
+
+    let fulfillmentJobs = [];
+    async function renderFulfillment() {
+      const [statsRes, jobsRes] = await Promise.all([
+        api('GET', '/fulfillment/stats'),
+        api('GET', '/fulfillment/jobs?limit=20'),
+      ]);
+      const stats = statsRes.data.success ? statsRes.data.data : { total: 0, by_status: {}, by_milestone: {} };
+      fulfillmentJobs = jobsRes.data.success ? jobsRes.data.data.jobs : [];
+
+      let html = '<div class="stats-grid">';
+      html += `<div class="stat-card"><div class="stat-label">Total Tracked</div><div class="stat-value">${stats.total}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Active</div><div class="stat-value">${stats.by_status.active || 0}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Delivered</div><div class="stat-value">${stats.by_milestone.delivered || 0}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">In Transit</div><div class="stat-value">${(stats.by_milestone.in_transit || 0) + (stats.by_milestone.collected || 0) + (stats.by_milestone.at_locker || 0)}</div></div>`;
+      html += '</div>';
+
+      html += '<div style="display:flex; gap:20px;">';
+      html += '<div style="flex:1; max-width:340px;">';
+      html += '<h3 style="margin-bottom:12px;">Tracked Orders</h3>';
+
+      if (fulfillmentJobs.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No fulfillment jobs yet. Orders submitted to the courier will appear here.</p>';
+      } else {
+        fulfillmentJobs.forEach((job, i) => {
+          const time = job.last_polled_at ? new Date(job.last_polled_at).toLocaleString() : 'Never polled';
+          const milestone = (job.milestone || 'pending').replace(/_/g, ' ');
+          const statusClass = job.status === 'completed' ? 'completed' : job.status === 'active' ? 'processing' : job.status === 'failed' ? 'failed' : '';
+          html += `<div class="job-row" onclick="showFulfillmentDetail(${i})">`;
+          html += `<div><div class="job-info">${job.order_number ? '#' + job.order_number : ''} ${job.customer_name || ''}</div>`;
+          html += `<div class="job-stage">${job.waybill} - ${milestone}</div>`;
+          html += `<div class="job-time">${time}</div></div>`;
+          html += '<div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">';
+          html += `<span class="status-badge ${statusClass}">${job.status}</span>`;
+          if (job.shopify_fulfilled) html += '<span class="status-badge completed" style="font-size:9px;">Shopify Fulfilled</span>';
+          html += '</div>';
+          html += '</div>';
+        });
+      }
+
+      html += '</div>';
+      html += '<div style="flex:2;" id="fulfillment-detail-panel"><p style="color:#666; font-size:13px;">Select an order to view its tracking timeline</p></div>';
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function showFulfillmentDetail(index) {
+      const j = fulfillmentJobs[index];
+      const { data } = await api('GET', '/fulfillment/jobs/' + j.id);
+      if (!data.success) return;
+      const job = data.data.job;
+      const stages = data.data.stages;
+      const events = data.data.events;
+
+      let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">`;
+      html += `<div><h3 style="margin-bottom:4px;">Order #${job.order_number || ''} - ${job.customer_name || ''}</h3>`;
+      html += `<div style="font-size:12px; color:#666;">Waybill: <strong>${job.waybill}</strong> &nbsp;|&nbsp; Pincode: <strong>${job.pincode || 'N/A'}</strong> &nbsp;|&nbsp; ${job.delivery_method || ''}</div></div>`;
+      html += `<button class="btn-sm" onclick="pollFulfillment('${job.id}', ${index})">Poll Now</button>`;
+      html += '</div>';
+
+      html += `<div class="stats-grid"><div class="stat-card"><div class="stat-label">Order Status</div><div class="stat-value"><span class="status-badge ${job.milestone === 'delivered' ? 'completed' : job.milestone === 'cancelled' || job.milestone === 'failed' ? 'failed' : 'processing'}">${(job.milestone || 'pending').replace(/_/g, ' ')}</span></div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Courier Status</div><div class="stat-value" style="font-size:13px;">${job.courier_status || '-'}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Polls</div><div class="stat-value">${job.poll_count || 0}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Locker</div><div class="stat-value" style="font-size:13px;">${job.terminal_id || '-'}</div></div></div>`;
+
+      // Shopify fulfillment card
+      html += '<div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:14px 18px; margin-bottom:16px;">';
+      html += '<div><div style="font-weight:600; font-size:14px;">Shopify Fulfillment</div>';
+      const shopifyStatus = job.shopify_fulfillment_status;
+      if (shopifyStatus === 'fulfilled') {
+        const fulfilledAt = job.shopify_fulfilled_at ? new Date(job.shopify_fulfilled_at).toLocaleString() : '';
+        html += `<div style="font-size:12px; color:#666; margin-top:2px;">Shopify confirms: fulfilled ${fulfilledAt ? '(' + fulfilledAt + ')' : ''}</div></div>`;
+        html += '<span class="status-badge completed">Fulfilled</span>';
+      } else if (shopifyStatus === 'partial') {
+        html += '<div style="font-size:12px; color:#666; margin-top:2px;">Shopify confirms: partially fulfilled</div></div>';
+        html += '<span class="status-badge processing">Partial</span>';
+      } else if (job.shopify_fulfilled) {
+        html += '<div style="font-size:12px; color:#666; margin-top:2px;">System fulfilled, awaiting Shopify confirmation</div></div>';
+        html += '<span class="status-badge processing">Sent</span>';
+      } else {
+        html += '<div style="font-size:12px; color:#666; margin-top:2px;">Not yet fulfilled in Shopify</div></div>';
+        html += '<span class="status-badge">Unfulfilled</span>';
+      }
+      html += '</div>';
+
+      html += '<h3 style="margin-bottom:12px;">Tracking Events</h3>';
+      html += '<div class="timeline">';
+      if (events.length === 0) {
+        html += '<p style="color:#666; font-size:13px; padding-left:8px;">No tracking events yet. Click Poll Now to fetch from courier.</p>';
+      } else {
+        events.forEach((ev, i) => {
+          const time = ev.event_date ? new Date(ev.event_date).toLocaleString() : new Date(ev.created_at).toLocaleString();
+          const lower = ev.status.toLowerCase();
+          const isDelivered = lower.includes('deliver') && !lower.includes('failed');
+          const isFailed = lower.includes('fail') || lower.includes('cancel');
+          // Use 'completed' style for historical events (they already happened, not pending)
+          const cssClass = isFailed ? 'failed' : 'completed';
+          html += `<div class="timeline-item ${cssClass}" style="animation-delay:${i*60}ms">`;
+          html += `<div class="stage-name">${ev.status}</div>`;
+          html += `<div class="stage-time">${time}${ev.location ? ' - ' + ev.location : ''}${ev.source ? ' - ' + ev.source : ''}</div>`;
+          if (ev.message) html += `<div class="stage-data">${escapeHtml(ev.message)}</div>`;
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+
+      document.getElementById('fulfillment-detail-panel').innerHTML = html;
+    }
+
+    async function pollFulfillment(jobId, index) {
+      await api('POST', '/fulfillment/poll/' + jobId);
+      // Wait a moment for the poll to complete, then refresh
+      setTimeout(() => showFulfillmentDetail(index), 2000);
+    }
+
+    // ============================================================
+    // AGENTS tab — overview of all AI agents + their settings
+    // ============================================================
+    async function renderAgents() {
+      // Fetch live config from the backend
+      const [{ data: ckRes }, { data: waRes }] = await Promise.all([
+        api('GET', '/caretaker/rules'),
+        api('GET', '/whatsapp/settings'),
+      ]);
+      const ckRules = ckRes && ckRes.success ? ckRes.data : {};
+      const waSettings = waRes && waRes.success ? waRes.data : {};
+
+      const agents = [
+        {
+          id: 'data-extraction',
+          name: 'Data Extraction Agent',
+          description: 'Reads incoming Shopify order notification emails and extracts structured data: order number, customer name, phone, delivery method, shipping address, collection method, and upload type.',
+          pipeline: 'Order Ingestion Pipeline (Email)',
+          stage: 'DATA_EXTRACTED',
+          model: 'gpt-4o-mini',
+          trigger: 'Automatic - runs on every new email',
+          status: 'active',
+          settings: [
+            { label: 'Model', value: 'gpt-4o-mini', key: 'OPENAI_MODEL' },
+            { label: 'Temperature', value: '0.1', key: null },
+            { label: 'JSON mode', value: 'Enabled', key: null },
+          ],
+          capabilities: [
+            'Extracts order number, customer name, phone, address',
+            'Detects delivery method (locker-to-locker, locker-to-door, etc.)',
+            'Identifies collection vs delivery orders',
+            'Cleans locker addresses (strips brand names, deduplicates tokens)',
+            'Routes ineligible orders to manual handling',
+          ],
+        },
+        {
+          id: 'caretaker-llm',
+          name: 'Caretaker AI Evaluator',
+          description: 'Reviews assembled orders before courier submission. Catches issues the rules engine cannot: address/method mismatches, suspicious names, locker distance anomalies, test orders.',
+          pipeline: 'Order Ingestion Pipeline (Email)',
+          stage: 'CARETAKER_REVIEW',
+          model: 'gpt-4o-mini',
+          trigger: 'Automatic - runs after rules check (when LLM is enabled)',
+          status: ckRules.llm_enabled ? 'active' : 'disabled',
+          settings: [
+            { label: 'Enabled', value: ckRules.llm_enabled ? 'Yes' : 'No', key: 'llm_enabled' },
+            { label: 'Mode', value: ckRules.mode || 'advisory', key: 'mode' },
+            { label: 'Can only escalate', value: 'Yes (never relaxes rules verdict)', key: null },
+          ],
+          capabilities: [
+            'Detects address/delivery-method mismatches',
+            'Flags placeholder or suspicious customer names',
+            'Identifies test orders from line items',
+            'Checks province/postal code consistency',
+            'Spots locker assignments far from customer',
+          ],
+        },
+        {
+          id: 'intent-router',
+          name: 'Intent Router',
+          description: 'Classifies inbound WhatsApp messages into intents and routes them to the correct chatbot agent.',
+          pipeline: 'WhatsApp Inbound',
+          stage: 'Classification',
+          model: 'gpt-4o-mini',
+          trigger: 'Automatic - every inbound WhatsApp message',
+          status: waSettings.configured ? 'active' : 'inactive (no WhatsApp configured)',
+          settings: [
+            { label: 'Intents', value: 'order_support, tenant_info, small_talk, human_handoff, unknown', key: null },
+            { label: 'Heuristic shortcuts', value: 'Greetings + explicit handoff requests skip LLM', key: null },
+          ],
+          capabilities: [
+            'Classifies messages into 5 intent categories',
+            'Uses cheap regex for obvious cases (saves API calls)',
+            'Falls back to LLM for ambiguous messages',
+            'Maintains conversation context for intent continuity',
+          ],
+        },
+        {
+          id: 'order-support',
+          name: 'Order Support Chatbot',
+          description: 'Answers customer questions about their orders over WhatsApp. Uses function calling to look up real order data, tracking events, and delivery status.',
+          pipeline: 'WhatsApp Inbound',
+          stage: 'Response generation',
+          model: 'gpt-4o-mini',
+          trigger: 'When intent = order_support',
+          status: waSettings.configured ? 'active' : 'inactive (no WhatsApp configured)',
+          settings: [
+            { label: 'Temperature', value: '0.3', key: null },
+            { label: 'Max tool rounds', value: '4', key: null },
+            { label: 'History window', value: 'Last 6 messages', key: null },
+          ],
+          capabilities: [
+            'lookup_orders_by_phone - finds customer orders by phone number',
+            'get_order_status - gets tracking detail for a specific order/waybill',
+            'escalate_to_human - hands off to a human agent when needed',
+            'Multi-turn tool calling (up to 4 rounds)',
+            'Shares PIN codes, waybills, delivery estimates',
+          ],
+        },
+        {
+          id: 'tenant-info',
+          name: 'Tenant Info Chatbot',
+          description: 'Answers questions about the store (return policy, shipping costs, business hours, products) using the Knowledge Base. Strictly grounded — never invents answers.',
+          pipeline: 'WhatsApp Inbound',
+          stage: 'Response generation',
+          model: 'gpt-4o-mini',
+          trigger: 'When intent = tenant_info',
+          status: waSettings.configured ? 'active' : 'inactive (no WhatsApp configured)',
+          settings: [
+            { label: 'Temperature', value: '0.2', key: null },
+            { label: 'Retrieval', value: 'Keyword scoring + top 4 docs', key: null },
+            { label: 'Grounding', value: 'Strict - says "I don\'t know" if not in KB', key: null },
+          ],
+          capabilities: [
+            'Keyword-based document retrieval from Knowledge Base',
+            'Answers from URLs, sitemaps, uploads, Shopify products, manual entries',
+            'Strictly grounded - never invents policies or prices',
+            'Surfaces source URLs so customers can click through',
+            'Escalates to human when answer not found',
+          ],
+        },
+      ];
+
+      let html = '';
+
+      // Summary cards
+      const activeCount = agents.filter(a => a.status === 'active').length;
+      html += '<div class="stats-grid" style="margin-bottom:20px;">';
+      html += `<div class="stat-card"><div class="stat-label">Total Agents</div><div class="stat-value">${agents.length}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Active</div><div class="stat-value" style="color:#16a34a;">${activeCount}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Model</div><div class="stat-value" style="font-size:14px;">gpt-4o-mini</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Provider</div><div class="stat-value" style="font-size:14px;">OpenAI</div></div>`;
+      html += '</div>';
+
+      // Agent cards
+      agents.forEach(a => {
+        const statusCls = a.status === 'active' ? 'completed' : a.status.includes('disabled') ? 'failed' : 'processing';
+        html += `<div class="card" style="margin-bottom:16px; border-left:3px solid ${a.status === 'active' ? '#16a34a' : a.status.includes('disabled') ? '#dc2626' : '#d97706'};">`;
+
+        // Header
+        html += `<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">`;
+        html += `<div><h3 style="margin:0 0 4px 0; font-size:15px;">${a.name}</h3>`;
+        html += `<div style="font-size:12px; color:#666;">${a.description}</div></div>`;
+        html += `<span class="status-badge ${statusCls}">${a.status}</span>`;
+        html += `</div>`;
+
+        // Meta row
+        html += `<div style="display:flex; gap:20px; font-size:12px; color:#666; margin-bottom:12px; flex-wrap:wrap;">`;
+        html += `<span>Pipeline: <strong>${a.pipeline}</strong></span>`;
+        html += `<span>Stage: <strong>${a.stage}</strong></span>`;
+        html += `<span>Model: <strong>${a.model}</strong></span>`;
+        html += `<span>Trigger: <strong>${a.trigger}</strong></span>`;
+        html += `</div>`;
+
+        // Two columns: capabilities + settings
+        html += `<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">`;
+
+        // Capabilities
+        html += `<div><div style="font-size:12px; font-weight:600; margin-bottom:6px; color:#374151;">Capabilities</div>`;
+        html += `<ul style="margin:0; padding-left:16px; font-size:12px; color:#444;">`;
+        a.capabilities.forEach(c => { html += `<li style="margin-bottom:3px;">${escapeHtml(c)}</li>`; });
+        html += `</ul></div>`;
+
+        // Settings
+        html += `<div><div style="font-size:12px; font-weight:600; margin-bottom:6px; color:#374151;">Settings</div>`;
+        html += `<table style="font-size:12px; width:100%;">`;
+        a.settings.forEach(s => {
+          html += `<tr><td style="padding:3px 8px 3px 0; color:#666;">${s.label}</td><td style="padding:3px 0;"><strong>${escapeHtml(s.value)}</strong></td></tr>`;
+        });
+        html += `</table>`;
+
+        // Quick action links
+        if (a.id === 'caretaker-llm') {
+          html += `<div style="margin-top:8px;"><button class="btn-sm" onclick="switchTab('caretaker')">Configure Rules</button></div>`;
+        } else if (a.id === 'tenant-info') {
+          html += `<div style="margin-top:8px;"><button class="btn-sm" onclick="switchTab('knowledge')">Manage Knowledge Base</button></div>`;
+        } else if (a.id === 'order-support' || a.id === 'intent-router') {
+          html += `<div style="margin-top:8px;"><button class="btn-sm" onclick="switchTab('inbox')">View Conversations</button></div>`;
+        }
+        html += `</div>`;
+
+        html += `</div>`; // grid
+        html += `</div>`; // card
+      });
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    // ============================================================
+    // CARETAKER tab
+    // ============================================================
+    async function renderCaretaker() {
+      const [{ data: rulesRes }, { data: evalsRes }] = await Promise.all([
+        api('GET', '/caretaker/rules'),
+        api('GET', '/caretaker/evaluations?limit=100'),
+      ]);
+      const rules = (rulesRes && rulesRes.success) ? rulesRes.data : {};
+      const evals = (evalsRes && evalsRes.success) ? evalsRes.data : [];
+
+      const counts = { approve: 0, review: 0, reject: 0 };
+      evals.forEach(e => { if (counts[e.verdict] !== undefined) counts[e.verdict]++; });
+
+      let html = '';
+      html += '<div class="stats-grid">';
+      html += `<div class="stat-card"><div class="stat-label">Mode</div><div class="stat-value" style="font-size:14px;">${rules.mode || 'advisory'}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Approved</div><div class="stat-value">${counts.approve}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Pending Review</div><div class="stat-value" style="color:#d97706;">${counts.review}</div></div>`;
+      html += `<div class="stat-card"><div class="stat-label">Rejected</div><div class="stat-value" style="color:#dc2626;">${counts.reject}</div></div>`;
+      html += '</div>';
+
+      // Rules editor
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:12px;">Rules Configuration</h3>';
+      html += '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">';
+      html += `<label style="font-size:12px;">Mode<select id="ck-mode" style="width:100%; padding:6px; margin-top:4px;">
+        <option value="shadow"${rules.mode==='shadow'?' selected':''}>shadow (log only)</option>
+        <option value="advisory"${rules.mode==='advisory'?' selected':''}>advisory (review on flag)</option>
+        <option value="strict"${rules.mode==='strict'?' selected':''}>strict (reject on flag)</option>
+      </select></label>`;
+      html += `<label style="font-size:12px;">Max distance (km)<input id="ck-max-dist" type="number" value="${rules.max_distance_km ?? ''}" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += `<label style="font-size:12px;">Repeat phone window (min)<input id="ck-window" type="number" value="${rules.repeat_phone_window_minutes ?? 30}" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += '</div>';
+
+      html += '<div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:12px; font-size:12px;">';
+      html += `<label><input type="checkbox" id="ck-enabled" ${rules.enabled !== false ? 'checked' : ''}/> Enabled</label>`;
+      html += `<label><input type="checkbox" id="ck-llm" ${rules.llm_enabled ? 'checked' : ''}/> AI evaluator (LLM pass)</label>`;
+      html += `<label><input type="checkbox" id="ck-phone" ${rules.require_phone !== false ? 'checked' : ''}/> Require phone</label>`;
+      html += `<label><input type="checkbox" id="ck-name" ${rules.require_customer_name !== false ? 'checked' : ''}/> Require name</label>`;
+      html += `<label><input type="checkbox" id="ck-items" ${rules.require_line_items !== false ? 'checked' : ''}/> Require line items</label>`;
+      html += `<label><input type="checkbox" id="ck-dup" ${rules.block_duplicate_order_number !== false ? 'checked' : ''}/> Block duplicate order #</label>`;
+      html += `<label><input type="checkbox" id="ck-repeat" ${rules.block_repeat_phone_within_minutes ? 'checked' : ''}/> Block repeat phone in window</label>`;
+      html += '</div>';
+
+      html += '<div style="margin-top:14px;"><button class="btn-sm" onclick="saveCaretakerRules()">Save Rules</button> <span id="ck-msg" style="font-size:12px; color:#16a34a; margin-left:10px;"></span></div>';
+      html += '</div>';
+
+      // Evaluations list
+      html += '<div class="card"><h3 style="margin-bottom:12px;">Recent Evaluations</h3>';
+      if (evals.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No evaluations yet</p>';
+      } else {
+        html += '<table style="width:100%; font-size:12px; border-collapse:collapse;">';
+        html += '<thead><tr style="border-bottom:1px solid #eee; color:#666;"><th style="text-align:left; padding:8px 6px;">When</th><th style="text-align:left;">Verdict</th><th style="text-align:left;">Mode</th><th style="text-align:left;">Flags</th><th style="text-align:left;">Summary</th><th></th></tr></thead><tbody>';
+        evals.forEach(e => {
+          const cls = e.verdict === 'approve' ? 'completed' : e.verdict === 'review' ? 'processing' : 'failed';
+          const flags = Array.isArray(e.flags) ? e.flags : (e.flags || []);
+          const time = new Date(e.created_at).toLocaleString();
+          html += `<tr style="border-bottom:1px solid #f5f5f5;">`;
+          html += `<td style="padding:8px 6px;">${time}</td>`;
+          html += `<td><span class="status-badge ${cls}">${e.verdict}</span></td>`;
+          html += `<td>${e.mode}</td>`;
+          html += `<td>${flags.join(', ') || '-'}</td>`;
+          html += `<td style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(e.summary||'').replace(/"/g,'&quot;')}">${escapeHtml(e.summary || '-')}</td>`;
+          html += '<td>';
+          if (e.verdict === 'review' && !e.resolution) {
+            html += `<button class="btn-sm" onclick="resolveCk('${e.id}','approved')">Approve</button> <button class="btn-sm btn-secondary" onclick="resolveCk('${e.id}','rejected')">Reject</button>`;
+          } else if (e.resolution) {
+            html += `<span style="font-size:11px; color:#666;">${e.resolution} by ${e.resolved_by || '-'}</span>`;
+          }
+          html += '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function saveCaretakerRules() {
+      const body = {
+        mode: document.getElementById('ck-mode').value,
+        max_distance_km: parseInt(document.getElementById('ck-max-dist').value) || null,
+        repeat_phone_window_minutes: parseInt(document.getElementById('ck-window').value) || 30,
+        enabled: document.getElementById('ck-enabled').checked,
+        llm_enabled: document.getElementById('ck-llm').checked,
+        require_phone: document.getElementById('ck-phone').checked,
+        require_customer_name: document.getElementById('ck-name').checked,
+        require_line_items: document.getElementById('ck-items').checked,
+        block_duplicate_order_number: document.getElementById('ck-dup').checked,
+        block_repeat_phone_within_minutes: document.getElementById('ck-repeat').checked,
+      };
+      const { data } = await api('POST', '/caretaker/rules', body);
+      const msg = document.getElementById('ck-msg');
+      if (data.success) { msg.textContent = 'Saved'; toast('Caretaker rules saved', 'success'); setTimeout(() => msg.textContent = '', 2000); }
+      else { msg.textContent = 'Save failed'; msg.style.color = '#dc2626'; toast(data.error?.message || 'Save failed', 'error'); }
+    }
+
+    async function resolveCk(id, resolution) {
+      await api('POST', `/caretaker/evaluations/${id}/resolve`, { resolution });
+      toast(`Evaluation ${resolution}`, resolution === 'approved' ? 'success' : 'warning');
+      renderCaretaker();
+    }
+
+    // ============================================================
+    // WHATSAPP tab
+    // ============================================================
+    async function renderWhatsApp() {
+      const [{ data: settingsRes }, { data: tplRes }, { data: msgRes }] = await Promise.all([
+        api('GET', '/whatsapp/settings'),
+        api('GET', '/whatsapp/templates'),
+        api('GET', '/whatsapp/messages?limit=50'),
+      ]);
+      const settings = settingsRes && settingsRes.success ? settingsRes.data : { configured: false };
+      const templates = tplRes && tplRes.success ? tplRes.data : [];
+      const messages = msgRes && msgRes.success ? msgRes.data : [];
+
+      let html = '';
+
+      // Settings card
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:12px;">WhatsApp Cloud API</h3>';
+      if (!settings.configured) {
+        html += '<p style="font-size:13px; color:#666; margin-bottom:10px;">Connect your Meta WhatsApp Business phone number to send order updates automatically.</p>';
+      } else {
+        html += `<div style="font-size:13px; color:#16a34a; margin-bottom:10px;">Configured. Phone Number ID: <strong>${settings.phone_number_id}</strong>${settings.display_phone_number ? ' (' + settings.display_phone_number + ')' : ''}</div>`;
+      }
+      html += '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:12px;">';
+      html += `<label style="font-size:12px;">Phone Number ID<input id="wa-pn-id" placeholder="e.g. 1234567890" value="${settings.phone_number_id || ''}" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += `<label style="font-size:12px;">Display number<input id="wa-display" placeholder="+27..." value="${settings.display_phone_number || ''}" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += `<label style="font-size:12px;">Business Account ID<input id="wa-baid" value="${settings.business_account_id || ''}" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += `<label style="font-size:12px;">Access Token<input id="wa-token" type="password" placeholder="paste new token to replace" style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += '</div>';
+      html += '<div style="margin-top:14px;"><button class="btn-sm" onclick="saveWaSettings()">Save Settings</button>';
+      if (settings.configured) html += ' <button class="btn-sm btn-secondary" onclick="deleteWaSettings()">Remove</button>';
+      html += ' <span id="wa-msg" style="font-size:12px; color:#16a34a; margin-left:10px;"></span></div>';
+      html += '</div>';
+
+      // Templates
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:12px;">Templates</h3>';
+      if (templates.length === 0) {
+        html += '<p style="font-size:13px; color:#666;">No templates yet. Save WhatsApp settings first to seed defaults.</p>';
+      } else {
+        templates.forEach(t => {
+          const vars = Array.isArray(t.variables) ? t.variables : (t.variables || []);
+          html += `<div style="border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:8px;">`;
+          html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;"><strong style="font-size:13px;">${t.purpose}</strong>`;
+          html += `<label style="font-size:11px;"><input type="checkbox" id="wa-tpl-en-${t.purpose}" ${t.enabled ? 'checked':''}/> enabled</label></div>`;
+          html += `<textarea id="wa-tpl-${t.purpose}" style="width:100%; font-size:12px; padding:6px; border:1px solid #ddd; border-radius:4px; min-height:60px;">${escapeHtml(t.body_text)}</textarea>`;
+          html += `<div style="font-size:11px; color:#666; margin-top:4px;">Variables: ${vars.join(', ') || 'none'}</div>`;
+          html += `<button class="btn-sm" style="margin-top:6px;" onclick="saveTemplate('${t.purpose}')">Save</button>`;
+          html += '</div>';
+        });
+      }
+      html += '</div>';
+
+      // Send test
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:12px;">Send Test Message</h3>';
+      html += '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:10px;">';
+      html += `<label style="font-size:12px;">To (phone)<input id="wa-test-to" placeholder="+2783..." style="width:100%; padding:6px; margin-top:4px;"/></label>`;
+      html += `<label style="font-size:12px;">Purpose<select id="wa-test-purpose" style="width:100%; padding:6px; margin-top:4px;">`;
+      ['order_confirmed','order_in_transit','order_at_locker','order_out_for_delivery','order_delivered','order_flagged'].forEach(p => {
+        html += `<option value="${p}">${p}</option>`;
+      });
+      html += `</select></label>`;
+      html += '</div><div style="margin-top:10px;"><button class="btn-sm" onclick="sendWaTest()">Send Test</button> <span id="wa-test-msg" style="font-size:12px; margin-left:10px;"></span></div>';
+      html += '</div>';
+
+      // Recent messages
+      html += '<div class="card"><h3 style="margin-bottom:12px;">Recent Messages</h3>';
+      if (messages.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No messages yet</p>';
+      } else {
+        html += '<table style="width:100%; font-size:12px; border-collapse:collapse;">';
+        html += '<thead><tr style="border-bottom:1px solid #eee; color:#666;"><th style="text-align:left; padding:8px 6px;">When</th><th style="text-align:left;">Direction</th><th style="text-align:left;">To</th><th style="text-align:left;">Purpose</th><th style="text-align:left;">Body</th><th style="text-align:left;">Status</th></tr></thead><tbody>';
+        messages.forEach(m => {
+          const time = new Date(m.created_at).toLocaleString();
+          const cls = m.status === 'sent' || m.status === 'delivered' ? 'completed' : m.status === 'failed' ? 'failed' : 'processing';
+          html += `<tr style="border-bottom:1px solid #f5f5f5;">`;
+          html += `<td style="padding:8px 6px;">${time}</td>`;
+          html += `<td>${m.direction}</td>`;
+          html += `<td>${m.phone_to}</td>`;
+          html += `<td>${m.purpose || '-'}</td>`;
+          html += `<td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(m.body||'').replace(/"/g,'&quot;')}">${escapeHtml(m.body||'')}</td>`;
+          html += `<td><span class="status-badge ${cls}">${m.status}</span></td>`;
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function saveWaSettings() {
+      const body = {
+        phone_number_id: document.getElementById('wa-pn-id').value,
+        display_phone_number: document.getElementById('wa-display').value,
+        business_account_id: document.getElementById('wa-baid').value,
+      };
+      const tok = document.getElementById('wa-token').value;
+      if (tok) body.access_token = tok;
+      if (!body.phone_number_id || !body.access_token) {
+        const m = document.getElementById('wa-msg'); m.style.color = '#dc2626'; m.textContent = 'phone_number_id and access_token are required'; return;
+      }
+      const { data } = await api('POST', '/whatsapp/settings', body);
+      const m = document.getElementById('wa-msg');
+      if (data.success) { m.style.color = '#16a34a'; m.textContent = 'Saved'; toast('WhatsApp settings saved', 'success'); setTimeout(() => renderWhatsApp(), 800); }
+      else { m.style.color = '#dc2626'; m.textContent = data.error?.message || 'Save failed'; toast(data.error?.message || 'Save failed', 'error'); }
+    }
+
+    async function deleteWaSettings() {
+      if (!confirm('Remove WhatsApp settings?')) return;
+      await api('DELETE', '/whatsapp/settings');
+      renderWhatsApp();
+    }
+
+    async function saveTemplate(purpose) {
+      const body_text = document.getElementById('wa-tpl-' + purpose).value;
+      const enabled = document.getElementById('wa-tpl-en-' + purpose).checked;
+      const { data } = await api('PUT', '/whatsapp/templates/' + purpose, { body_text, enabled });
+      const m = document.getElementById('wa-msg');
+      if (data.success) { m.style.color = '#16a34a'; m.textContent = 'Template ' + purpose + ' saved'; setTimeout(() => m.textContent = '', 2000); }
+    }
+
+    async function sendWaTest() {
+      const to = document.getElementById('wa-test-to').value;
+      const purpose = document.getElementById('wa-test-purpose').value;
+      if (!to) { document.getElementById('wa-test-msg').textContent = 'Enter a recipient phone'; return; }
+      const { data } = await api('POST', '/whatsapp/test', { to, purpose });
+      const m = document.getElementById('wa-test-msg');
+      if (data.success) {
+        const r = data.data;
+        if (r.sent) { m.style.color = '#16a34a'; m.textContent = 'Sent (id: ' + (r.wa_message_id || r.message_id) + ')'; }
+        else { m.style.color = '#d97706'; m.textContent = r.skipped_reason || r.error || 'Skipped'; }
+      } else {
+        m.style.color = '#dc2626'; m.textContent = data.error?.message || 'Failed';
+      }
+      setTimeout(() => renderWhatsApp(), 1500);
+    }
+
+    // ============================================================
+    // INBOX tab — chatbot conversations
+    // ============================================================
+    let _selectedConv = null;
+    async function renderInbox() {
+      const { data } = await api('GET', '/knowledge/__conversations');
+      const convs = data && data.success ? data.data : [];
+
+      let html = '<div style="display:flex; gap:16px;">';
+      // Left: conversation list
+      html += '<div style="flex:1; max-width:340px;"><div class="card" style="padding:0;">';
+      html += '<div style="padding:12px 14px; border-bottom:1px solid #eee; font-weight:600; font-size:13px;">Conversations (' + convs.length + ')</div>';
+      if (convs.length === 0) {
+        html += '<p style="padding:12px; color:#666; font-size:13px;">No conversations yet. Inbound WhatsApp messages will appear here.</p>';
+      } else {
+        convs.forEach(c => {
+          const t = c.last_message_at ? new Date(c.last_message_at).toLocaleString() : '';
+          const cls = c.status === 'escalated' ? 'failed' : c.status === 'closed' ? 'completed' : 'processing';
+          html += `<div class="job-row" onclick="openConv('${c.id}')" style="cursor:pointer; padding:10px 14px;">`;
+          html += `<div style="font-size:13px; font-weight:600;">${c.customer_phone_normalized}</div>`;
+          html += `<div style="font-size:11px; color:#666;">${c.current_intent || 'no intent yet'} - ${t}</div>`;
+          html += `<span class="status-badge ${cls}" style="font-size:9px;">${c.status}</span>`;
+          html += `</div>`;
+        });
+      }
+      html += '</div></div>';
+
+      // Right: messages panel
+      html += '<div style="flex:2;" id="conv-detail-panel"><p style="color:#666; font-size:13px;">Select a conversation to view messages</p></div>';
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    async function openConv(id) {
+      _selectedConv = id;
+      const { data } = await api('GET', '/knowledge/__conversations/' + id + '/messages');
+      if (!data.success) return;
+      const conv = data.data.conversation;
+      const msgs = data.data.messages;
+
+      let html = `<h3 style="margin-bottom:8px;">${conv.customer_phone_normalized}</h3>`;
+      html += `<div style="font-size:12px; color:#666; margin-bottom:12px;">intent: ${conv.current_intent || '-'} &nbsp;|&nbsp; status: ${conv.status}</div>`;
+      html += '<div class="card" style="padding:12px; max-height:600px; overflow-y:auto;">';
+      msgs.forEach(m => {
+        const isUser = m.role === 'user';
+        const bg = isUser ? '#e0f2fe' : '#f3f4f6';
+        const align = isUser ? 'flex-start' : 'flex-end';
+        html += `<div style="display:flex; justify-content:${align}; margin-bottom:8px;">`;
+        html += `<div style="background:${bg}; padding:8px 12px; border-radius:8px; max-width:75%;">`;
+        html += `<div style="font-size:10px; color:#666; margin-bottom:2px;">${m.role}${m.agent ? ' / ' + m.agent : ''}${m.intent ? ' / ' + m.intent : ''}</div>`;
+        html += `<div style="font-size:13px; white-space:pre-wrap;">${escapeHtml(m.content || '')}</div>`;
+        html += `<div style="font-size:10px; color:#999; margin-top:4px;">${new Date(m.created_at).toLocaleString()}</div>`;
+        html += `</div></div>`;
+      });
+      html += '</div>';
+
+      document.getElementById('conv-detail-panel').innerHTML = html;
+    }
+
+    // ============================================================
+    // KNOWLEDGE tab — tenant info chatbot docs
+    // ============================================================
+    let _kbActiveSource = null;
+    async function renderKnowledge() {
+      const [{ data: srcRes }, { data: docRes }] = await Promise.all([
+        api('GET', '/knowledge/sources'),
+        api('GET', '/knowledge?limit=300'),
+      ]);
+      const sources = srcRes && srcRes.success ? srcRes.data : [];
+      const allDocs = docRes && docRes.success ? docRes.data : [];
+
+      let html = '';
+
+      // Add source row
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:10px;">Add Knowledge</h3>';
+      html += '<p style="font-size:12px; color:#666; margin-bottom:10px;">Pull content from a URL, a sitemap, an uploaded file, or your Shopify product catalog. The chatbot draws answers from these.</p>';
+
+      // URL row
+      html += '<div style="display:flex; gap:8px; margin-bottom:8px;">';
+      html += '<input id="kb-url" placeholder="https://yourstore.com/pages/return-policy" style="flex:1; padding:8px;"/>';
+      html += '<button class="btn-sm" onclick="addKbUrl()">Add URL</button></div>';
+
+      // Sitemap row
+      html += '<div style="display:flex; gap:8px; margin-bottom:8px;">';
+      html += '<input id="kb-sitemap" placeholder="https://yourstore.com/sitemap.xml" style="flex:1; padding:8px;"/>';
+      html += '<input id="kb-prefix" placeholder="optional path filter, e.g. /pages/" style="width:200px; padding:8px;"/>';
+      html += '<input id="kb-max" type="number" placeholder="max pages (50)" style="width:130px; padding:8px;" value="50"/>';
+      html += '<button class="btn-sm" onclick="addKbSitemap()">Crawl Sitemap</button></div>';
+
+      // Upload row
+      html += '<div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">';
+      html += '<input id="kb-file" type="file" accept=".pdf,.txt,.html,.htm" style="flex:1; padding:6px;"/>';
+      html += '<button class="btn-sm" onclick="uploadKbFile()">Upload File</button></div>';
+
+      // Shopify row
+      html += '<div style="display:flex; gap:8px; margin-bottom:8px;">';
+      html += '<button class="btn-sm" onclick="syncShopify()">Sync Shopify Products</button>';
+      html += '<span style="font-size:11px; color:#666; align-self:center;">Pulls product titles, descriptions, prices into the knowledge base. Requires Shopify API credentials in Settings.</span>';
+      html += '</div>';
+
+      // Manual entry collapsible
+      html += '<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:13px; color:#4f46e5;">+ Add manual entry</summary>';
+      html += '<div style="margin-top:8px; display:grid; grid-template-columns: 2fr 1fr; gap:8px;">';
+      html += '<input id="kb-title" placeholder="Title" style="padding:6px;"/>';
+      html += '<select id="kb-cat" style="padding:6px;"><option value="">category</option><option value="faq">faq</option><option value="policy">policy</option><option value="shipping">shipping</option><option value="returns">returns</option></select>';
+      html += '</div>';
+      html += '<textarea id="kb-body" placeholder="Body" style="width:100%; margin-top:6px; padding:6px; min-height:80px;"></textarea>';
+      html += '<button class="btn-sm" style="margin-top:6px;" onclick="saveManualKb()">Save Entry</button>';
+      html += '</details>';
+
+      html += '<div id="kb-msg" style="margin-top:10px; font-size:12px;"></div>';
+      html += '</div>';
+
+      // Sources list
+      html += '<div class="card" style="margin-bottom:16px;"><h3 style="margin-bottom:10px;">Sources (' + sources.length + ')</h3>';
+      if (sources.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No sources yet</p>';
+      } else {
+        html += '<table style="width:100%; font-size:12px; border-collapse:collapse;">';
+        html += '<thead><tr style="border-bottom:1px solid #eee; color:#666; text-align:left;"><th style="padding:8px 6px;">Type</th><th>Label</th><th>Docs</th><th>Status</th><th>Last sync</th><th></th></tr></thead><tbody>';
+        sources.forEach(s => {
+          const cls = s.status === 'completed' ? 'completed' : s.status === 'failed' ? 'failed' : 'processing';
+          const synced = s.last_synced_at ? new Date(s.last_synced_at).toLocaleString() : '-';
+          const labelHtml = s.source_url
+            ? `<a href="${s.source_url}" target="_blank" style="color:#4f46e5;">${escapeHtml(s.label)}</a>`
+            : escapeHtml(s.label);
+          html += `<tr style="border-bottom:1px solid #f5f5f5; cursor:pointer;" onclick="filterKbBySource('${s.id}')">`;
+          html += `<td style="padding:8px 6px;">${s.source_type}</td>`;
+          html += `<td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${labelHtml}</td>`;
+          html += `<td>${s.document_count}</td>`;
+          html += `<td><span class="status-badge ${cls}">${s.status}</span>${s.last_error ? ` <span title="${(s.last_error||'').replace(/"/g,'&quot;')}" style="color:#dc2626; cursor:help;">!</span>` : ''}</td>`;
+          html += `<td>${synced}</td>`;
+          html += `<td onclick="event.stopPropagation()">`;
+          if (s.source_type !== 'upload' && s.source_type !== 'manual') {
+            html += `<button class="btn-sm" onclick="resyncSource('${s.id}')">Re-sync</button> `;
+          }
+          html += `<button class="btn-sm btn-secondary" onclick="deleteSource('${s.id}')">Delete</button>`;
+          html += `</td></tr>`;
+        });
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+
+      // Documents list (filterable by selected source)
+      const filteredDocs = _kbActiveSource ? allDocs.filter(d => d.source_id === _kbActiveSource) : allDocs;
+      const headerLabel = _kbActiveSource ? `Documents in selected source (${filteredDocs.length})` : `All Documents (${filteredDocs.length})`;
+      html += '<div class="card"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">';
+      html += `<h3 style="margin:0;">${headerLabel}</h3>`;
+      if (_kbActiveSource) html += `<button class="btn-sm btn-secondary" onclick="clearKbFilter()">Show all</button>`;
+      html += '</div>';
+      if (filteredDocs.length === 0) {
+        html += '<p style="color:#666; font-size:13px;">No documents</p>';
+      } else {
+        filteredDocs.slice(0, 100).forEach(d => {
+          const sourceLink = d.source_url ? ` <a href="${d.source_url}" target="_blank" style="font-size:11px; color:#4f46e5;">[link]</a>` : '';
+          html += `<div style="border:1px solid #eee; border-radius:6px; padding:10px; margin-bottom:8px;">`;
+          html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">`;
+          html += `<div><strong style="font-size:13px;">${escapeHtml(d.title)}</strong>`;
+          if (d.category) html += `<span style="font-size:11px; color:#666; margin-left:8px;">[${d.category}]</span>`;
+          html += sourceLink + '</div>';
+          html += `<div><label style="font-size:11px; margin-right:10px;"><input type="checkbox" ${d.enabled ? 'checked':''} onchange="toggleKb('${d.id}', this.checked)"/> enabled</label>`;
+          html += `<button class="btn-sm btn-secondary" onclick="deleteKb('${d.id}')">Delete</button></div>`;
+          html += `</div>`;
+          html += `<div style="font-size:12px; color:#444; white-space:pre-wrap; max-height:120px; overflow-y:auto;">${escapeHtml(d.body.substring(0, 600))}${d.body.length > 600 ? '...' : ''}</div>`;
+          html += `</div>`;
+        });
+        if (filteredDocs.length > 100) html += `<p style="color:#666; font-size:11px;">Showing first 100 of ${filteredDocs.length}</p>`;
+      }
+      html += '</div>';
+
+      document.getElementById('tab-content').innerHTML = html;
+    }
+
+    function showKbMsg(text, ok) {
+      const m = document.getElementById('kb-msg');
+      if (!m) return;
+      m.style.color = ok ? '#16a34a' : '#dc2626';
+      m.textContent = text;
+    }
+
+    async function addKbUrl() {
+      const url = document.getElementById('kb-url').value.trim();
+      if (!url) return showKbMsg('Enter a URL', false);
+      showKbMsg('Fetching ' + url + '...', true);
+      const { data } = await api('POST', '/knowledge/sources/url', { url });
+      if (data.success) {
+        const s = data.data;
+        showKbMsg(`Added: +${s.documents_added} new, ${s.documents_updated} updated, ${s.documents_unchanged} unchanged`, true);
+        document.getElementById('kb-url').value = '';
+        setTimeout(() => renderKnowledge(), 800);
+      } else {
+        showKbMsg(data.error?.message || 'Failed', false);
+      }
+    }
+
+    async function addKbSitemap() {
+      const sitemap_url = document.getElementById('kb-sitemap').value.trim();
+      const path_prefix = document.getElementById('kb-prefix').value.trim();
+      const max_pages = parseInt(document.getElementById('kb-max').value) || 50;
+      if (!sitemap_url) return showKbMsg('Enter a sitemap URL', false);
+      showKbMsg('Crawling sitemap (this can take a minute)...', true);
+      const { data } = await api('POST', '/knowledge/sources/sitemap', { sitemap_url, path_prefix: path_prefix || null, max_pages });
+      if (data.success) {
+        const s = data.data;
+        showKbMsg(`Crawl done: +${s.documents_added}, updated ${s.documents_updated}, unchanged ${s.documents_unchanged}${s.errors.length ? ', ' + s.errors.length + ' errors' : ''}`, true);
+        document.getElementById('kb-sitemap').value = '';
+        setTimeout(() => renderKnowledge(), 800);
+      } else {
+        showKbMsg(data.error?.message || 'Failed', false);
+      }
+    }
+
+    async function uploadKbFile() {
+      const fileInput = document.getElementById('kb-file');
+      const file = fileInput.files[0];
+      if (!file) return showKbMsg('Choose a file', false);
+      showKbMsg('Uploading ' + file.name + '...', true);
+      const fd = new FormData();
+      fd.append('file', file);
+      const opts = { method: 'POST', body: fd, headers: {} };
+      if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+      try {
+        const r = await fetch(API + '/knowledge/sources/upload', opts);
+        const data = await r.json();
+        if (data.success) {
+          const s = data.data;
+          showKbMsg(`Uploaded: +${s.documents_added}, updated ${s.documents_updated}`, true);
+          fileInput.value = '';
+          setTimeout(() => renderKnowledge(), 800);
+        } else {
+          showKbMsg(data.error?.message || 'Failed', false);
+        }
+      } catch (err) {
+        showKbMsg(err.message, false);
+      }
+    }
+
+    async function syncShopify() {
+      showKbMsg('Pulling Shopify products...', true);
+      const { data } = await api('POST', '/knowledge/sources/shopify-products', {});
+      if (data.success) {
+        const s = data.data;
+        showKbMsg(`Shopify sync done: +${s.documents_added}, updated ${s.documents_updated}, unchanged ${s.documents_unchanged}`, true);
+        setTimeout(() => renderKnowledge(), 800);
+      } else {
+        showKbMsg(data.error?.message || 'Failed', false);
+      }
+    }
+
+    async function resyncSource(id) {
+      showKbMsg('Re-syncing...', true);
+      const { data } = await api('POST', '/knowledge/sources/' + id + '/resync', {});
+      if (data.success) {
+        const s = data.data;
+        showKbMsg(`Re-sync done: +${s.documents_added}, updated ${s.documents_updated}, unchanged ${s.documents_unchanged}`, true);
+        setTimeout(() => renderKnowledge(), 800);
+      } else {
+        showKbMsg(data.error?.message || 'Failed', false);
+      }
+    }
+
+    async function deleteSource(id) {
+      if (!confirm('Delete this source and all its documents?')) return;
+      await api('DELETE', '/knowledge/sources/' + id);
+      _kbActiveSource = null;
+      renderKnowledge();
+    }
+
+    function filterKbBySource(id) { _kbActiveSource = id; renderKnowledge(); }
+    function clearKbFilter() { _kbActiveSource = null; renderKnowledge(); }
+
+    async function saveManualKb() {
+      const title = document.getElementById('kb-title').value.trim();
+      const category = document.getElementById('kb-cat').value;
+      const body = document.getElementById('kb-body').value.trim();
+      if (!title || !body) return showKbMsg('Title and body required', false);
+      const { data } = await api('POST', '/knowledge', { title, category: category || null, body });
+      if (data.success) {
+        showKbMsg('Manual entry added', true);
+        document.getElementById('kb-title').value = '';
+        document.getElementById('kb-body').value = '';
+        setTimeout(() => renderKnowledge(), 600);
+      } else {
+        showKbMsg(data.error?.message || 'Failed', false);
+      }
+    }
+
+    async function toggleKb(id, enabled) {
+      await api('PUT', '/knowledge/' + id, { enabled });
+    }
+
+    async function deleteKb(id) {
+      if (!confirm('Delete this document?')) return;
+      await api('DELETE', '/knowledge/' + id);
+      renderKnowledge();
+    }
+
+    // Init
+    (async function init() {
+      if (token) {
+        const { status, data } = await api('GET', '/auth/me');
+        if (status === 200 && data.success) {
+          if (data.data.tenant.status === 'active') loadDashboard(); else loadOnboarding();
+        } else {
+          token = null;
+          localStorage.removeItem('token');
+          document.getElementById('app-layout').classList.add('hidden');
+          document.getElementById('auth-container').classList.remove('hidden');
+          showPage('login');
+        }
+      } else {
+        document.getElementById('app-layout').classList.add('hidden');
+        showPage('login');
+      }
+    })();
+  </script>
+</body>
+</html>
