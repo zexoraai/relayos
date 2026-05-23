@@ -623,7 +623,7 @@ async function showFulfillmentDetail(i) {
   const isCancelled = job.status === 'cancelled' || job.milestone === 'cancelled';
   const cancelBtn = isCancelled
     ? `<span class="px-4 py-2 bg-red-50 text-red-500 font-semibold rounded-full text-xs">Cancelled</span>`
-    : `<button onclick="cancelFulfillment('${job.id}',${i})" class="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Cancel Shipment</button>`;
+    : `<button onclick="openCancelModal('${job.id}',${i})" class="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Cancel...</button>`;
   html += `<div class="flex items-center justify-between mb-4"><h3 class="font-bold">Order #${job.order_number||''} - ${job.customer_name||''}</h3><div class="flex gap-2"><button onclick="pollFulfillment('${job.id}',${i})" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Poll Now</button>${cancelBtn}</div></div>`;
   html += `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">`;
   html += `<div class="bg-surface-100 rounded-xl p-3"><div class="text-[10px] text-gray-400 uppercase">Waybill</div><div class="text-sm font-bold">${job.waybill||'-'}</div></div>`;
@@ -643,18 +643,94 @@ async function showFulfillmentDetail(i) {
 }
 async function pollFulfillment(jobId, index) { await api('POST', '/fulfillment/poll/' + jobId); toast('Polling...','info'); setTimeout(() => showFulfillmentDetail(index), 2000); }
 
-async function cancelFulfillment(jobId, index) {
-  const reason = prompt('Cancel this shipment with PUDO?\n\nEnter a reason (sent to PUDO as the cancellation message):', 'Customer requested cancellation');
-  if (reason === null) return; // user hit Cancel on the prompt
-  const trimmed = (reason || '').trim();
-  if (!trimmed) { toast('A reason is required to cancel', 'error'); return; }
-  const { data } = await api('POST', '/fulfillment/jobs/' + jobId + '/cancel', { reason: trimmed });
+function openCancelModal(jobId, index) {
+  // Build a one-shot modal so we don't need persistent DOM.
+  const existing = document.getElementById('cancel-modal-overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'cancel-modal-overlay';
+  overlay.className = 'fixed inset-0 bg-black/40 flex items-center justify-center z-[10000]';
+  overlay.innerHTML = `
+    <div class="bg-white rounded-3xl shadow-card p-6 w-full max-w-md mx-4">
+      <h3 class="font-bold text-base mb-1">Cancel order</h3>
+      <p class="text-xs text-gray-400 mb-4">Choose what to cancel. PUDO and Shopify are independent.</p>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Scope</label>
+          <select id="cancel-scope" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">
+            <option value="both">Cancel everything (PUDO + Shopify)</option>
+            <option value="pudo">PUDO shipment only (keep Shopify order)</option>
+            <option value="shopify">Shopify order only (keep PUDO shipment)</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Reason</label>
+          <input id="cancel-reason" value="Customer requested cancellation" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">
+          <p class="text-[11px] text-gray-400 mt-1">Sent to PUDO as the cancellation message and stored on the order timeline.</p>
+        </div>
+        <div id="cancel-shopify-extras" class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Shopify reason</label>
+            <select id="cancel-shopify-reason" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">
+              <option value="customer">Customer changed/cancelled</option>
+              <option value="inventory">Out of stock</option>
+              <option value="fraud">Fraud</option>
+              <option value="declined">Payment declined</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="cancel-refund" class="rounded"> Refund the customer</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="cancel-restock" class="rounded" checked> Restock inventory</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="cancel-notify" class="rounded" checked> Email customer</label>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button onclick="closeCancelModal()" class="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm transition-all">Back</button>
+        <button onclick="submitCancel('${jobId}',${index})" class="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-full text-sm transition-all">Cancel order</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  // Hide Shopify-only options when scope=pudo
+  const scopeEl = document.getElementById('cancel-scope');
+  const extras = document.getElementById('cancel-shopify-extras');
+  scopeEl.addEventListener('change', () => {
+    extras.style.display = scopeEl.value === 'pudo' ? 'none' : 'block';
+  });
+}
+
+function closeCancelModal() {
+  const overlay = document.getElementById('cancel-modal-overlay');
+  if (overlay) overlay.remove();
+}
+
+async function submitCancel(jobId, index) {
+  const v = (id) => { const el = document.getElementById(id); return el ? (el.type === 'checkbox' ? el.checked : el.value) : null; };
+  const scope = v('cancel-scope') || 'both';
+  const reason = (v('cancel-reason') || '').toString().trim();
+  if (!reason) { toast('A reason is required to cancel', 'error'); return; }
+  const body = {
+    scope,
+    reason,
+    shopify_reason: v('cancel-shopify-reason') || 'customer',
+    refund: !!v('cancel-refund'),
+    restock: v('cancel-restock') !== false, // default true
+    notify_customer: v('cancel-notify') !== false, // default true
+  };
+  closeCancelModal();
+  toast('Cancelling…', 'info');
+  const { data } = await api('POST', '/fulfillment/jobs/' + jobId + '/cancel', body);
   if (data.success) {
-    toast('Shipment cancelled', 'success');
-    setTimeout(() => { renderFulfillment(); }, 800);
+    toast(data.data?.message || 'Cancel completed', 'success');
+  } else if (data.data) {
+    // Partial: show which side failed
+    const pudoMsg = data.data.pudo?.error || (data.data.pudo?.ok ? 'ok' : 'failed');
+    const shopMsg = data.data.shopify?.error || (data.data.shopify?.ok ? 'ok' : 'failed');
+    toast(`Partial cancel — PUDO: ${pudoMsg}, Shopify: ${shopMsg}`, 'warning');
   } else {
     toast(data.error?.message || 'Cancel failed', 'error');
   }
+  setTimeout(() => { renderFulfillment(); }, 800);
 }
 
 async function renderCaretaker() {

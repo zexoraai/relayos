@@ -3,6 +3,7 @@ import { AuthenticatedRequest, authMiddleware } from './middleware';
 import { getDb } from '../db/connection';
 import { ensureFulfillmentJob, processFulfillmentJob } from '../fulfillment';
 import { cancelPudoShipment } from '../fulfillment/pudoCancel';
+import { cancelShopifyOrder } from '../fulfillment/shopifyCancel';
 import { createChildLogger } from '../observability/logger';
 
 const log = createChildLogger({ module: 'fulfillment-api' });
@@ -119,111 +120,196 @@ router.post('/poll/:id', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /fulfillment/jobs/:id/cancel
  *
- * Cancels the PUDO shipment for a fulfillment job.
- * Body: { reason?: string }   (defaults to "Cancelled via dashboard")
+ * Body: {
+ *   scope?: 'pudo' | 'shopify' | 'both'   // default 'both'
+ *   reason?: string                        // free-text shown to PUDO + saved to event
+ *   shopify_reason?: 'customer'|'inventory'|'fraud'|'declined'|'other'
+ *   refund?: boolean                       // Shopify only — issue refund as part of cancel
+ *   restock?: boolean                      // Shopify only — restore inventory
+ *   notify_customer?: boolean              // Shopify only — email the customer
+ * }
  *
- * Side effects on success:
- *  - Marks the local order.status = 'cancelled' and order.packing_status = 'cancelled'
- *  - Marks the fulfillment_job.status = 'cancelled' and stops further polling
- *  - Records a fulfillment_event for the cancellation
+ * Behavior by scope:
+ *  - 'pudo'   : cancel the PUDO shipment only. Local order moves to 'cancelled'
+ *               (delivery is gone, so the local state should reflect that), but
+ *               nothing is touched on Shopify.
+ *  - 'shopify': cancel on Shopify only. The PUDO shipment continues — useful
+ *               when Shopify changed but you still want delivery to happen.
+ *               Local order stays as-is.
+ *  - 'both'   : cancel on both (default). Both side-effects applied.
+ *
+ * The two API calls are independent: a partial failure (e.g. Shopify cancel
+ * fails but PUDO succeeds) is reported with per-side status so you know
+ * exactly what was rolled back where.
  */
 router.post('/jobs/:id/cancel', async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id as string;
+  const scope: 'pudo' | 'shopify' | 'both' = (req.body?.scope || 'both').toLowerCase();
+  if (!['pudo', 'shopify', 'both'].includes(scope)) {
+    return res.status(400).json({ success: false, error: { code: 'BAD_SCOPE', message: 'scope must be pudo | shopify | both' } });
+  }
   const reason = (req.body?.reason || '').toString().trim() || 'Cancelled via dashboard';
+  const shopifyReason = (req.body?.shopify_reason || 'customer') as 'customer' | 'inventory' | 'fraud' | 'declined' | 'other';
+  const refund = !!req.body?.refund;
+  const restock = req.body?.restock !== false; // default true
+  const notifyCustomer = req.body?.notify_customer !== false; // default true
 
   const job = await db('fulfillment_jobs').where({ id: jobId, tenant_id: tenantId }).first();
   if (!job) {
     return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Fulfillment job not found' } });
   }
-  if (job.status === 'cancelled') {
-    return res.status(409).json({ success: false, error: { code: 'ALREADY_CANCELLED', message: 'This shipment is already cancelled' } });
-  }
-
   const order = await db('orders').where({ id: job.order_id, tenant_id: tenantId }).first();
   if (!order) {
     return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found for this job' } });
   }
 
-  // Find the shipment_id. The most reliable place is the latest TRACKING_FETCHED stage result;
-  // fall back to courier_response from submit time.
-  let shipmentId: number | null = null;
-  const tracking = await db('fulfillment_stage_results')
-    .where({ fulfillment_job_id: jobId, stage: 'TRACKING_FETCHED' })
-    .whereNotNull('output_data')
-    .orderBy('created_at', 'desc')
-    .first();
-  if (tracking?.output_data) {
-    const out = typeof tracking.output_data === 'string' ? JSON.parse(tracking.output_data) : tracking.output_data;
-    if (out?.shipment_id) shipmentId = Number(out.shipment_id);
-  }
-  if (!shipmentId && order.courier_response) {
-    const cr = typeof order.courier_response === 'string' ? JSON.parse(order.courier_response) : order.courier_response;
-    if (cr?.shipment_id) shipmentId = Number(cr.shipment_id);
-    if (!shipmentId && cr?.id) shipmentId = Number(cr.id);
+  const result: {
+    pudo?: { ok: boolean; status?: number; body?: any; error?: string; skipped_reason?: string };
+    shopify?: { ok: boolean; status?: number; body?: any; error?: string; skipped_reason?: string; already_cancelled?: boolean };
+  } = {};
+
+  // --- PUDO leg ---------------------------------------------------------------
+  if (scope === 'pudo' || scope === 'both') {
+    if (job.status === 'cancelled') {
+      result.pudo = { ok: true, skipped_reason: 'already cancelled locally' };
+    } else {
+      // Find the shipment_id. The most reliable place is the latest TRACKING_FETCHED
+      // stage result; fall back to courier_response from submit time.
+      let shipmentId: number | null = null;
+      const tracking = await db('fulfillment_stage_results')
+        .where({ fulfillment_job_id: jobId, stage: 'TRACKING_FETCHED' })
+        .whereNotNull('output_data')
+        .orderBy('created_at', 'desc')
+        .first();
+      if (tracking?.output_data) {
+        const out = typeof tracking.output_data === 'string' ? JSON.parse(tracking.output_data) : tracking.output_data;
+        if (out?.shipment_id) shipmentId = Number(out.shipment_id);
+      }
+      if (!shipmentId && order.courier_response) {
+        const cr = typeof order.courier_response === 'string' ? JSON.parse(order.courier_response) : order.courier_response;
+        if (cr?.shipment_id) shipmentId = Number(cr.shipment_id);
+        if (!shipmentId && cr?.id) shipmentId = Number(cr.id);
+      }
+      if (!shipmentId) {
+        result.pudo = {
+          ok: false,
+          error: 'Could not locate PUDO shipment_id (shipment not submitted or tracking not polled yet)',
+        };
+      } else {
+        try {
+          const r = await cancelPudoShipment({
+            tenantId,
+            shipmentId,
+            serviceLevelCode: order.service_level_code,
+            reason,
+          });
+          result.pudo = { ok: r.ok, status: r.status, body: r.body };
+          if (!r.ok) result.pudo.error = `PUDO returned ${r.status}`;
+        } catch (err: any) {
+          log.error({ err: err.message, jobId, shipmentId }, 'PUDO cancel threw');
+          result.pudo = { ok: false, error: err.message };
+        }
+      }
+    }
+  } else {
+    result.pudo = { ok: true, skipped_reason: 'scope=' + scope };
   }
 
-  if (!shipmentId) {
-    return res.status(400).json({
-      success: false,
-      error: {
-        code: 'NO_SHIPMENT_ID',
-        message: 'Could not locate PUDO shipment_id for this order. The shipment may not have been submitted yet, or tracking has not been polled.',
-      },
-    });
+  // --- Shopify leg ------------------------------------------------------------
+  if (scope === 'shopify' || scope === 'both') {
+    try {
+      const r = await cancelShopifyOrder({
+        tenantId,
+        shopifyOrderId: order.shopify_order_id || null,
+        orderNumber: order.order_number,
+        reason: shopifyReason,
+        refund,
+        restock,
+        email: notifyCustomer,
+        staffNote: reason,
+      });
+      result.shopify = {
+        ok: r.ok,
+        status: r.status,
+        body: r.body,
+        already_cancelled: r.alreadyCancelled,
+      };
+      if (!r.ok) result.shopify.error = `Shopify returned ${r.status}`;
+    } catch (err: any) {
+      log.error({ err: err.message, jobId, orderNumber: order.order_number }, 'Shopify cancel threw');
+      result.shopify = { ok: false, error: err.message };
+    }
+  } else {
+    result.shopify = { ok: true, skipped_reason: 'scope=' + scope };
   }
 
-  let result;
-  try {
-    result = await cancelPudoShipment({
-      tenantId,
-      shipmentId,
-      serviceLevelCode: order.service_level_code,
-      reason,
-    });
-  } catch (err: any) {
-    log.error({ err: err.message, jobId, shipmentId }, 'PUDO cancel call threw');
-    return res.status(502).json({ success: false, error: { code: 'PUDO_CALL_FAILED', message: err.message } });
-  }
+  // --- Local persistence ------------------------------------------------------
+  // Update local state to reflect what actually happened.
+  // - PUDO cancel succeeded → fulfillment job + order go to 'cancelled' (no delivery happening)
+  // - Shopify cancel only → leave fulfillment alone but record the event
+  const pudoCancelled = (scope === 'pudo' || scope === 'both') && result.pudo?.ok && !result.pudo?.skipped_reason;
 
-  if (!result.ok) {
-    return res.status(502).json({
-      success: false,
-      error: { code: 'PUDO_REJECTED', message: `PUDO returned ${result.status}`, details: result.body },
-    });
-  }
-
-  // Persist cancellation locally — wrap so partial failures still report something useful.
   await db.transaction(async (trx) => {
-    await trx('orders').where({ id: order.id }).update({
-      status: 'cancelled',
-      packing_status: 'cancelled',
-      updated_at: new Date(),
-    });
-    await trx('fulfillment_jobs').where({ id: jobId }).update({
-      status: 'cancelled',
-      next_poll_at: null,
-      updated_at: new Date(),
-    });
+    if (pudoCancelled) {
+      await trx('orders').where({ id: order.id }).update({
+        status: 'cancelled',
+        packing_status: 'cancelled',
+        updated_at: new Date(),
+      });
+      await trx('fulfillment_jobs').where({ id: jobId }).update({
+        status: 'cancelled',
+        next_poll_at: null,
+        updated_at: new Date(),
+      });
+    } else if (result.shopify?.ok && (scope === 'shopify' || scope === 'both')) {
+      // Shopify-only cancel: don't touch fulfillment_jobs (delivery still in flight),
+      // but mark the order so dashboard listings reflect it.
+      await trx('orders').where({ id: order.id }).update({
+        shopify_fulfillment_status: 'cancelled',
+        updated_at: new Date(),
+      });
+    }
+
+    // Always log a fulfillment_event so the timeline shows the action even on partial failure.
+    const message = `cancel ${scope}: pudo=${result.pudo?.ok ? 'ok' : 'fail'} shopify=${result.shopify?.ok ? 'ok' : 'fail'} — ${reason}`;
     await trx('fulfillment_events').insert({
       fulfillment_job_id: jobId,
       order_id: order.id,
-      status: 'cancelled',
-      message: reason,
+      status: pudoCancelled ? 'cancelled' : 'cancel_attempt',
+      message,
       source: 'dashboard',
       event_date: new Date(),
     });
   });
 
-  log.info({ tenantId, jobId, shipmentId, orderNumber: order.order_number, by: req.tenant?.email, reason }, 'Shipment cancelled');
+  const overallOk = result.pudo?.ok !== false && result.shopify?.ok !== false;
 
-  return res.status(200).json({
-    success: true,
+  log.info(
+    {
+      tenantId,
+      jobId,
+      orderNumber: order.order_number,
+      scope,
+      pudoOk: result.pudo?.ok,
+      shopifyOk: result.shopify?.ok,
+      by: req.tenant?.email,
+      reason,
+    },
+    'Cancel request processed',
+  );
+
+  return res.status(overallOk ? 200 : 207).json({
+    success: overallOk,
     data: {
-      message: 'Shipment cancelled',
-      shipment_id: shipmentId,
-      pudo_response: result.body,
+      scope,
+      reason,
+      pudo: result.pudo,
+      shopify: result.shopify,
+      message: overallOk
+        ? 'Cancel completed'
+        : 'Cancel partially failed — see pudo / shopify fields for details',
     },
   });
 });
