@@ -70,7 +70,14 @@ export async function executeLockersResolved(
   if (!pudoSettings) {
     throw new Error('PUDO settings not configured for tenant');
   }
-  const apiKey = decrypt(pudoSettings.encrypted_pudo_api_key);
+  let apiKey: string;
+  try {
+    apiKey = decrypt(pudoSettings.encrypted_pudo_api_key);
+  } catch (err: any) {
+    throw new Error(
+      `PUDO API key could not be decrypted (likely encrypted with a different ENCRYPTION_KEY). Re-save PUDO credentials in the dashboard. Underlying: ${err.message}`,
+    );
+  }
 
   const lockersResponse = await fetchLockers(apiKey);
   const lockerList = extractLockerList(lockersResponse);

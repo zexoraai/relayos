@@ -56,7 +56,36 @@ export async function executeShopifyEnriched(
   }
 
   const shopifyStore = apiSettings.shopify_store;
-  const accessToken = decrypt(apiSettings.encrypted_access_token);
+  let accessToken: string;
+  try {
+    accessToken = decrypt(apiSettings.encrypted_access_token);
+  } catch (err: any) {
+    log.warn(
+      { jobId, tenantId, error: err.message },
+      'Shopify enrichment skipped — failed to decrypt access token (likely encrypted with a different ENCRYPTION_KEY). Re-save Shopify API credentials in the dashboard.',
+    );
+    const result: ShopifyEnrichmentResult = {
+      enriched: false,
+      order_number: extracted.order_number,
+      line_items: [],
+      skipped_reason: `Could not decrypt Shopify API token: ${err.message}`,
+    };
+
+    await db('pipeline_stage_results').insert({
+      pipeline_job_id: jobId,
+      stage: PipelineStage.SHOPIFY_ENRICHED,
+      status: PipelineStatus.SKIPPED,
+      input_data: JSON.stringify({ order_number: extracted.order_number }),
+      output_data: JSON.stringify(result),
+    });
+
+    await db('pipeline_jobs').where({ id: jobId }).update({
+      current_stage: PipelineStage.SHOPIFY_ENRICHED,
+      updated_at: new Date(),
+    });
+
+    return result;
+  }
 
   try {
     const order = await fetchShopifyOrder(shopifyStore, accessToken, extracted.order_number);
