@@ -155,12 +155,16 @@ router.post('/jobs/:id/reprocess', async (req: AuthenticatedRequest, res: Respon
     await trx('pipeline_jobs').where({ id: jobId, tenant_id: tenantId }).delete();
   });
 
-  await enqueuePipelineJob({
-    emailId,
-    tenantId,
-    mailboxId,
-    correlationId,
-  });
+  await enqueuePipelineJob(
+    {
+      emailId,
+      tenantId,
+      mailboxId,
+      correlationId,
+    },
+    // Unique job id so BullMQ doesn't dedupe against the prior `pipeline-<emailId>` id
+    `pipeline-${emailId}-reprocess-${Date.now()}`,
+  );
 
   log.info({ tenantId, oldJobId: jobId, emailId }, 'Pipeline job reprocess requested — old artifacts deleted, fresh job enqueued');
 
