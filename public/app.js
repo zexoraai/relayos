@@ -774,6 +774,23 @@ async function renderSettings() {
   html += `<div class="space-y-3"><div><label class="block text-xs text-gray-400 mb-1">Store</label><input id="set-shop-store" value="${shop.shopify_store||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Access Token</label><input id="set-shop-token" type="password" placeholder="paste new token" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `</div><button onclick="saveSettingsShopify()" class="mt-4 w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button></div>`;
+  // IMAP
+  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Email Ingestion (IMAP)</h3>`;
+  if (imap.configured) {
+    html += `<div class="flex items-center gap-2 mb-4"><span class="w-2 h-2 rounded-full bg-green-400"></span><span class="text-sm text-green-600 font-medium">Configured</span><span class="text-xs text-gray-400 ml-2">${imap.imap_host||''}</span></div>`;
+  }
+  html += `<div class="space-y-3">`;
+  html += `<div class="grid grid-cols-3 gap-2">`;
+  html += `<div class="col-span-2"><label class="block text-xs text-gray-400 mb-1">Host</label><input id="set-imap-host" value="${imap.imap_host||''}" placeholder="imap.gmail.com" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Port</label><input id="set-imap-port" type="number" value="${imap.imap_port||993}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `</div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Username</label><input id="set-imap-user" value="${imap.imap_username||''}" placeholder="orders@yourstore.com" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Password</label><input id="set-imap-pass" type="password" placeholder="${imap.configured?'leave blank to keep current':'app password'}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Mailbox</label><input id="set-imap-mailbox" value="${imap.imap_mailbox||'INBOX'}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `</div>`;
+  html += `<div class="flex gap-2 mt-4"><button onclick="saveSettingsImap()" class="flex-1 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button>`;
+  if (imap.configured) html += `<button onclick="deleteSettingsImap()" class="px-4 py-2.5 bg-red-50 text-red-500 font-semibold rounded-full text-sm hover:bg-red-100 transition-all">Remove</button>`;
+  html += `</div></div>`;
   // Collection
   html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Collection Contact</h3>`;
   html += `<div class="space-y-3"><div><label class="block text-xs text-gray-400 mb-1">Name</label><input id="set-coll-name" value="${coll.contact_name||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
@@ -785,6 +802,28 @@ async function renderSettings() {
   document.getElementById('tab-content').innerHTML = html;
 }
 async function saveSettingsShopify() { const b={shopify_store:document.getElementById('set-shop-store').value,shopify_access_token:document.getElementById('set-shop-token').value}; if(!b.shopify_store){toast('Store URL required','error');return;} if(!b.shopify_access_token){toast('Token required','error');return;} const{data}=await api('POST','/settings/shopify-api',b); if(data.success)toast('Shopify saved','success');else toast(data.error?.message||'Failed','error'); }
+async function saveSettingsImap() {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const body = {
+    imap_host: v('set-imap-host'),
+    imap_port: v('set-imap-port') || '993',
+    imap_username: v('set-imap-user'),
+    imap_mailbox: v('set-imap-mailbox') || 'INBOX',
+  };
+  const pass = v('set-imap-pass');
+  if (pass) body.imap_password = pass;
+  if (!body.imap_host) { toast('Host required', 'error'); return; }
+  if (!body.imap_username) { toast('Username required', 'error'); return; }
+  const { data } = await api('POST', '/settings/imap', body);
+  if (data.success) { toast('IMAP saved', 'success'); setTimeout(() => renderSettings(), 500); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+async function deleteSettingsImap() {
+  if (!confirm('Remove IMAP credentials? Email ingestion will stop for this tenant.')) return;
+  const { data } = await api('DELETE', '/settings/imap');
+  if (data.success) { toast('IMAP removed', 'info'); renderSettings(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
 async function saveSettingsCollection() { const b={contact_name:document.getElementById('set-coll-name').value,contact_email:document.getElementById('set-coll-email').value,contact_phone:document.getElementById('set-coll-phone').value,collection_terminal_id:document.getElementById('set-coll-terminal').value}; const{data}=await api('POST','/settings/collection-contact',b); if(data.success)toast('Collection contact saved','success');else toast(data.error?.message||'Failed','error'); }
 
 async function renderWhatsApp() {

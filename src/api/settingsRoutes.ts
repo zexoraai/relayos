@@ -122,6 +122,90 @@ router.get('/imap', async (req: AuthenticatedRequest, res: Response) => {
   });
 });
 
+// POST /settings/imap - Upsert IMAP credentials post-onboarding.
+// Used by the dashboard's Settings page to fix or rotate IMAP credentials
+// without going back through onboarding.
+router.post('/imap', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const { imap_host, imap_port, imap_username, imap_password, imap_mailbox, imap_use_ssl, polling_interval, batch_size } = req.body;
+
+  if (!imap_host) return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'imap_host is required' } });
+  if (!imap_port || isNaN(Number(imap_port))) return res.status(400).json({ success: false, error: { code: 'INVALID_PORT', message: 'imap_port is required and must be numeric' } });
+  if (!imap_username) return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'imap_username is required' } });
+
+  // Find the Shopify Basic integration. IMAP is only meaningful for that plan,
+  // so reuse the existing integration row.
+  const integration = await db('tenant_ecommerce_integrations')
+    .where({ tenant_id: tenantId, platform: 'shopify', shopify_plan: 'basic' })
+    .first();
+  if (!integration) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'NO_INTEGRATION',
+        message: 'IMAP requires a Shopify Basic integration. Configure one via onboarding first.',
+      },
+    });
+  }
+
+  const existing = await db('tenant_imap_settings')
+    .where({ tenant_id: tenantId, ecommerce_integration_id: integration.id })
+    .first();
+
+  // imap_password is optional on update — if blank, keep the current encrypted value.
+  if (!existing && !imap_password) {
+    return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'imap_password is required for first save' } });
+  }
+
+  const imapData: Record<string, any> = {
+    tenant_id: tenantId,
+    ecommerce_integration_id: integration.id,
+    imap_host,
+    imap_port: Number(imap_port),
+    imap_username,
+    imap_mailbox: imap_mailbox || 'INBOX',
+    imap_use_ssl: imap_use_ssl !== false,
+    polling_interval: polling_interval || 30000,
+    batch_size: batch_size || 50,
+  };
+
+  if (imap_password) {
+    imapData.encrypted_imap_password = encrypt(imap_password);
+  }
+
+  if (existing) {
+    await db('tenant_imap_settings')
+      .where({ id: existing.id })
+      .update({ ...imapData, updated_at: new Date() });
+  } else {
+    await db('tenant_imap_settings').insert(imapData);
+  }
+
+  await db('tenant_ecommerce_integrations')
+    .where({ id: integration.id })
+    .update({ is_configured: true, updated_at: new Date() });
+
+  log.info({ tenantId, host: imap_host, user: imap_username }, 'IMAP settings updated from dashboard');
+
+  return res.status(200).json({
+    success: true,
+    data: { message: 'IMAP settings saved', is_configured: true },
+  });
+});
+
+// DELETE /settings/imap - Remove IMAP credentials. Stops polling for this tenant.
+router.delete('/imap', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+
+  await db('tenant_imap_settings').where({ tenant_id: tenantId }).delete();
+
+  log.info({ tenantId }, 'IMAP settings removed from dashboard');
+
+  return res.status(200).json({ success: true, data: { message: 'IMAP settings removed' } });
+});
+
 // GET /settings/pudo - Get current PUDO settings (without secrets)
 router.get('/pudo', async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
