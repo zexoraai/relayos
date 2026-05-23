@@ -43,6 +43,10 @@ RUN npm install --omit=dev --no-audit --no-fund
 # Server build output
 COPY --from=server-build /app/dist ./dist
 COPY knexfile.js ./
+# Prompts (data-extraction, intent-router, caretaker-llm, etc.) are loaded
+# from the filesystem at runtime via promptRegistry. They MUST be in the image
+# or every AI stage will throw "No prompts found for agent: ...".
+COPY prompts/ ./prompts/
 # Static legacy assets first…
 COPY public/ ./public/
 # …then overlay the client build into public/dist (express serves /new from here)
