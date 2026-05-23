@@ -48,18 +48,36 @@ export async function getActiveImapIngestionConfigs(): Promise<TenantImapConfig[
       'tis.batch_size'
     );
 
-  return rows.map((row: any) => ({
-    tenant_id: row.tenant_id,
-    ecommerce_integration_id: row.ecommerce_integration_id,
-    imap_host: row.imap_host,
-    imap_port: row.imap_port,
-    imap_username: row.imap_username,
-    imap_password: decrypt(row.encrypted_imap_password),
-    imap_mailbox: row.imap_mailbox,
-    imap_use_ssl: row.imap_use_ssl,
-    polling_interval: row.polling_interval,
-    batch_size: row.batch_size,
-  }));
+  return rows.reduce((out: TenantImapConfig[], row: any) => {
+    let password: string;
+    try {
+      password = decrypt(row.encrypted_imap_password);
+    } catch (err: any) {
+      log.error(
+        {
+          tenantId: row.tenant_id,
+          imapHost: row.imap_host,
+          imapUsername: row.imap_username,
+          error: err.message,
+        },
+        'Failed to decrypt tenant IMAP password — skipping this tenant. The credentials need to be re-saved (likely encrypted with a different ENCRYPTION_KEY).',
+      );
+      return out;
+    }
+    out.push({
+      tenant_id: row.tenant_id,
+      ecommerce_integration_id: row.ecommerce_integration_id,
+      imap_host: row.imap_host,
+      imap_port: row.imap_port,
+      imap_username: row.imap_username,
+      imap_password: password,
+      imap_mailbox: row.imap_mailbox,
+      imap_use_ssl: row.imap_use_ssl,
+      polling_interval: row.polling_interval,
+      batch_size: row.batch_size,
+    });
+    return out;
+  }, []);
 }
 
 /**

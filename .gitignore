@@ -61,3 +61,8 @@ latest.txt
 workerlogs.txt
 client-tsc-out.txt
 tsc.txt
+logs.txt
+log*.txt
+boot.txt
+vars.txt
+redeploy.txt
