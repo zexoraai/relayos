@@ -89,6 +89,30 @@ export class ImapClient {
   }
 
   /**
+   * Returns the highest UID currently in the mailbox, or 0 if empty.
+   * IMAP servers expose `uidNext` (the next UID to be assigned), so the
+   * current HEAD is `uidNext - 1`.
+   *
+   * Use this to "skip to now" when first connecting a new tenant — set
+   * last_uid to this value and the worker will only see emails arriving
+   * AFTER first connect, not the entire mailbox history.
+   */
+  async getHighestUid(): Promise<number> {
+    await this.ensureConnected();
+    const lock = await this.client!.getMailboxLock(this.imapConfig.mailbox);
+    try {
+      const mailbox = this.client!.mailbox;
+      if (mailbox && typeof mailbox === 'object' && 'uidNext' in mailbox) {
+        const uidNext = Number((mailbox as any).uidNext) || 0;
+        return uidNext > 0 ? uidNext - 1 : 0;
+      }
+      return 0;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Fetch emails by UID range in batches.
    * Returns emails with UID > lastUid, limited by batchSize.
    */

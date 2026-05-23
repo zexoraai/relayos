@@ -91,16 +91,19 @@ export class TenantIngestionWorker {
     const ctx = { tenantId: cfg.tenant_id, host: cfg.imap_host, user: cfg.imap_username };
     const db = getDb();
 
-    // 1. Ensure mailboxes row exists
+    // 1. Ensure mailboxes row exists. Don't create the offset row yet —
+    //    we want to seed last_uid to the current INBOX HEAD so a new
+    //    tenant's worker doesn't backfill the entire mailbox.
     const existing = await db('mailboxes')
       .where({ host: cfg.imap_host, username: cfg.imap_username, mailbox_folder: cfg.imap_mailbox })
       .first();
     let mailboxId: string;
+    let needsHeadSeed = false;
     if (existing) {
       mailboxId = existing.id;
       const offset = await db('email_ingestion_offsets').where({ mailbox_id: mailboxId }).first();
       if (!offset) {
-        await db('email_ingestion_offsets').insert({ mailbox_id: mailboxId, last_uid: 0 });
+        needsHeadSeed = true;
       }
     } else {
       mailboxId = uuidv4();
@@ -112,7 +115,7 @@ export class TenantIngestionWorker {
         mailbox_folder: cfg.imap_mailbox,
         is_active: true,
       });
-      await db('email_ingestion_offsets').insert({ mailbox_id: mailboxId, last_uid: 0 });
+      needsHeadSeed = true;
     }
 
     // 2. Reuse or build a client for this tenant
@@ -139,6 +142,26 @@ export class TenantIngestionWorker {
       };
       client = new ImapClient(mailboxId, tenantImapConfig);
       this.clients.set(cfg.tenant_id, { client, mailboxId, lastUsername: cfg.imap_username });
+    }
+
+    // 2b. Seed offset row at INBOX HEAD if this is the first poll for this mailbox.
+    //     Only past UIDs already in the mailbox are skipped — anything new from
+    //     here on will be picked up.
+    if (needsHeadSeed) {
+      try {
+        const head = await client.getHighestUid();
+        await db('email_ingestion_offsets').insert({
+          mailbox_id: mailboxId,
+          last_uid: head,
+        });
+        log.info({ ...ctx, mailboxId, head }, 'Seeded ingestion offset at INBOX HEAD (new tenant — skipping backfill)');
+      } catch (err: any) {
+        // If we cannot read HEAD (e.g. connect failed), fall back to 0 so we never
+        // permanently lose mail. The worst case is a one-time backfill, which is
+        // visible and recoverable.
+        log.warn({ ...ctx, mailboxId, error: err.message }, 'Could not read INBOX HEAD on first connect, seeding offset at 0 (backfill will run)');
+        await db('email_ingestion_offsets').insert({ mailbox_id: mailboxId, last_uid: 0 });
+      }
     }
 
     // 3. Fetch + enqueue (ImapClient methods call ensureConnected() internally)
