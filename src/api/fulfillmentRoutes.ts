@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { AuthenticatedRequest, authMiddleware } from './middleware';
 import { getDb } from '../db/connection';
 import { ensureFulfillmentJob, processFulfillmentJob } from '../fulfillment';
+import { cancelPudoShipment } from '../fulfillment/pudoCancel';
 import { createChildLogger } from '../observability/logger';
 
 const log = createChildLogger({ module: 'fulfillment-api' });
@@ -113,6 +114,118 @@ router.post('/poll/:id', async (req: AuthenticatedRequest, res: Response) => {
   processFulfillmentJob(jobId).catch(err => log.error({ err }, 'Manual poll failed'));
 
   return res.status(200).json({ success: true, data: { message: 'Poll triggered' } });
+});
+
+/**
+ * POST /fulfillment/jobs/:id/cancel
+ *
+ * Cancels the PUDO shipment for a fulfillment job.
+ * Body: { reason?: string }   (defaults to "Cancelled via dashboard")
+ *
+ * Side effects on success:
+ *  - Marks the local order.status = 'cancelled' and order.packing_status = 'cancelled'
+ *  - Marks the fulfillment_job.status = 'cancelled' and stops further polling
+ *  - Records a fulfillment_event for the cancellation
+ */
+router.post('/jobs/:id/cancel', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const jobId = req.params.id as string;
+  const reason = (req.body?.reason || '').toString().trim() || 'Cancelled via dashboard';
+
+  const job = await db('fulfillment_jobs').where({ id: jobId, tenant_id: tenantId }).first();
+  if (!job) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Fulfillment job not found' } });
+  }
+  if (job.status === 'cancelled') {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_CANCELLED', message: 'This shipment is already cancelled' } });
+  }
+
+  const order = await db('orders').where({ id: job.order_id, tenant_id: tenantId }).first();
+  if (!order) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found for this job' } });
+  }
+
+  // Find the shipment_id. The most reliable place is the latest TRACKING_FETCHED stage result;
+  // fall back to courier_response from submit time.
+  let shipmentId: number | null = null;
+  const tracking = await db('fulfillment_stage_results')
+    .where({ fulfillment_job_id: jobId, stage: 'TRACKING_FETCHED' })
+    .whereNotNull('output_data')
+    .orderBy('created_at', 'desc')
+    .first();
+  if (tracking?.output_data) {
+    const out = typeof tracking.output_data === 'string' ? JSON.parse(tracking.output_data) : tracking.output_data;
+    if (out?.shipment_id) shipmentId = Number(out.shipment_id);
+  }
+  if (!shipmentId && order.courier_response) {
+    const cr = typeof order.courier_response === 'string' ? JSON.parse(order.courier_response) : order.courier_response;
+    if (cr?.shipment_id) shipmentId = Number(cr.shipment_id);
+    if (!shipmentId && cr?.id) shipmentId = Number(cr.id);
+  }
+
+  if (!shipmentId) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'NO_SHIPMENT_ID',
+        message: 'Could not locate PUDO shipment_id for this order. The shipment may not have been submitted yet, or tracking has not been polled.',
+      },
+    });
+  }
+
+  let result;
+  try {
+    result = await cancelPudoShipment({
+      tenantId,
+      shipmentId,
+      serviceLevelCode: order.service_level_code,
+      reason,
+    });
+  } catch (err: any) {
+    log.error({ err: err.message, jobId, shipmentId }, 'PUDO cancel call threw');
+    return res.status(502).json({ success: false, error: { code: 'PUDO_CALL_FAILED', message: err.message } });
+  }
+
+  if (!result.ok) {
+    return res.status(502).json({
+      success: false,
+      error: { code: 'PUDO_REJECTED', message: `PUDO returned ${result.status}`, details: result.body },
+    });
+  }
+
+  // Persist cancellation locally — wrap so partial failures still report something useful.
+  await db.transaction(async (trx) => {
+    await trx('orders').where({ id: order.id }).update({
+      status: 'cancelled',
+      packing_status: 'cancelled',
+      updated_at: new Date(),
+    });
+    await trx('fulfillment_jobs').where({ id: jobId }).update({
+      status: 'cancelled',
+      next_poll_at: null,
+      updated_at: new Date(),
+    });
+    await trx('fulfillment_events').insert({
+      fulfillment_job_id: jobId,
+      order_id: order.id,
+      status: 'cancelled',
+      message: reason,
+      source: 'dashboard',
+      event_date: new Date(),
+    });
+  });
+
+  log.info({ tenantId, jobId, shipmentId, orderNumber: order.order_number, by: req.tenant?.email, reason }, 'Shipment cancelled');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      message: 'Shipment cancelled',
+      shipment_id: shipmentId,
+      pudo_response: result.body,
+    },
+  });
 });
 
 export default router;

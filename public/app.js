@@ -620,7 +620,11 @@ async function showFulfillmentDetail(i) {
   if (!data.success) return;
   const job = data.data.job; const events = data.data.events||[];
   let html = `<div class="bg-white rounded-3xl shadow-card p-6">`;
-  html += `<div class="flex items-center justify-between mb-4"><h3 class="font-bold">Order #${job.order_number||''} - ${job.customer_name||''}</h3><button onclick="pollFulfillment('${job.id}',${i})" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Poll Now</button></div>`;
+  const isCancelled = job.status === 'cancelled' || job.milestone === 'cancelled';
+  const cancelBtn = isCancelled
+    ? `<span class="px-4 py-2 bg-red-50 text-red-500 font-semibold rounded-full text-xs">Cancelled</span>`
+    : `<button onclick="cancelFulfillment('${job.id}',${i})" class="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Cancel Shipment</button>`;
+  html += `<div class="flex items-center justify-between mb-4"><h3 class="font-bold">Order #${job.order_number||''} - ${job.customer_name||''}</h3><div class="flex gap-2"><button onclick="pollFulfillment('${job.id}',${i})" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Poll Now</button>${cancelBtn}</div></div>`;
   html += `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">`;
   html += `<div class="bg-surface-100 rounded-xl p-3"><div class="text-[10px] text-gray-400 uppercase">Waybill</div><div class="text-sm font-bold">${job.waybill||'-'}</div></div>`;
   html += `<div class="bg-surface-100 rounded-xl p-3"><div class="text-[10px] text-gray-400 uppercase">PIN</div><div class="text-sm font-bold">${job.pincode||'-'}</div></div>`;
@@ -638,6 +642,20 @@ async function showFulfillmentDetail(i) {
   document.getElementById('fulfillment-detail-panel').innerHTML = html;
 }
 async function pollFulfillment(jobId, index) { await api('POST', '/fulfillment/poll/' + jobId); toast('Polling...','info'); setTimeout(() => showFulfillmentDetail(index), 2000); }
+
+async function cancelFulfillment(jobId, index) {
+  const reason = prompt('Cancel this shipment with PUDO?\n\nEnter a reason (sent to PUDO as the cancellation message):', 'Customer requested cancellation');
+  if (reason === null) return; // user hit Cancel on the prompt
+  const trimmed = (reason || '').trim();
+  if (!trimmed) { toast('A reason is required to cancel', 'error'); return; }
+  const { data } = await api('POST', '/fulfillment/jobs/' + jobId + '/cancel', { reason: trimmed });
+  if (data.success) {
+    toast('Shipment cancelled', 'success');
+    setTimeout(() => { renderFulfillment(); }, 800);
+  } else {
+    toast(data.error?.message || 'Cancel failed', 'error');
+  }
+}
 
 async function renderCaretaker() {
   const [{ data: rulesRes }, { data: evalsRes }] = await Promise.all([api('GET', '/caretaker/rules'), api('GET', '/caretaker/evaluations?limit=50')]);
