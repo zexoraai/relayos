@@ -456,7 +456,7 @@ async function showJobDetail(index) {
 
   let html = `<div class="bg-white rounded-3xl shadow-card p-6">`;
   // Header
-  html += `<div class="flex items-center justify-between mb-2"><h3 class="font-bold text-base">Pipeline Detail</h3>${badge(job.status)}</div>`;
+  html += `<div class="flex items-center justify-between mb-2"><h3 class="font-bold text-base">Pipeline Detail</h3><div class="flex items-center gap-2">${badge(job.status)}<button onclick="reprocessJob('${job.id}')" class="px-3 py-1.5 bg-surface-100 hover:bg-brand-100 text-gray-700 hover:text-gray-900 text-xs font-semibold rounded-full transition-all" title="Re-run pipeline (uses current settings — useful after fixing Shopify token, prompts, etc.)">Reprocess</button></div></div>`;
   html += `<div class="text-[11px] text-gray-400 mb-4">${new Date(job.created_at).toLocaleString()} - ${job.correlation_id||''}</div>`;
 
   // Order summary (if the pipeline produced an order)
@@ -507,6 +507,17 @@ async function showJobDetail(index) {
 
   const panel = document.getElementById('job-detail-panel');
   if (panel) panel.innerHTML = html;
+}
+
+async function reprocessJob(jobId) {
+  if (!confirm('Re-run this order through the pipeline?\n\nThe existing pipeline_job, stage results, and any order created from this run will be deleted, then a fresh job will be enqueued. Use this after fixing settings (Shopify token, prompts, geocoding key, etc.).')) return;
+  const { data } = await api('POST', '/pipeline/jobs/' + jobId + '/reprocess');
+  if (data.success) {
+    toast('Reprocess enqueued — give it a few seconds, then refresh the pipeline list', 'success');
+    setTimeout(() => renderPipeline(), 2000);
+  } else {
+    toast(data.error?.message || 'Reprocess failed', 'error');
+  }
 }
 
 // Extract a human-readable one-liner from stage output

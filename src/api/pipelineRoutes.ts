@@ -121,4 +121,57 @@ router.post('/trigger/:emailId', async (req: AuthenticatedRequest, res: Response
   return res.status(201).json({ success: true, data: { message: 'Pipeline job enqueued', email_id: emailId } });
 });
 
+/**
+ * POST /pipeline/jobs/:id/reprocess
+ *
+ * Force-reprocess a pipeline job that already finished. Useful when something
+ * downstream changed (e.g. Shopify API token re-saved with a working key) and
+ * you want to re-run an existing order through the pipeline so it picks up
+ * the new state.
+ *
+ * Behaviour:
+ *  - Deletes the existing pipeline_job + stage_results
+ *  - Deletes the resulting order if one was created (so re-run can recreate it cleanly)
+ *  - Re-enqueues the BullMQ job referencing the same email
+ */
+router.post('/jobs/:id/reprocess', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const jobId = req.params.id;
+
+  const job = await db('pipeline_jobs').where({ id: jobId, tenant_id: tenantId }).first();
+  if (!job) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Pipeline job not found' } });
+  }
+
+  const emailId = job.email_id;
+  const mailboxId = job.mailbox_id;
+  const correlationId = job.correlation_id || emailId;
+
+  await db.transaction(async (trx) => {
+    // Drop any order created from this pipeline run so a fresh run can recreate it
+    await trx('orders').where({ pipeline_job_id: jobId, tenant_id: tenantId }).delete();
+    await trx('pipeline_stage_results').where({ pipeline_job_id: jobId }).delete();
+    await trx('pipeline_jobs').where({ id: jobId, tenant_id: tenantId }).delete();
+  });
+
+  await enqueuePipelineJob({
+    emailId,
+    tenantId,
+    mailboxId,
+    correlationId,
+  });
+
+  log.info({ tenantId, oldJobId: jobId, emailId }, 'Pipeline job reprocess requested — old artifacts deleted, fresh job enqueued');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      message: 'Pipeline reprocess enqueued',
+      old_job_id: jobId,
+      email_id: emailId,
+    },
+  });
+});
+
 export default router;
