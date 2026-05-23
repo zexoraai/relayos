@@ -775,9 +775,15 @@ async function renderHealth() {
 }
 
 async function renderSettings() {
-  const [{ data: shopRes }, { data: imapRes }, { data: collRes }] = await Promise.all([api('GET','/settings/shopify-api'), api('GET','/settings/imap'), api('GET','/settings/collection-contact')]);
+  const [{ data: shopRes }, { data: imapRes }, { data: pudoRes }, { data: collRes }] = await Promise.all([
+    api('GET','/settings/shopify-api'),
+    api('GET','/settings/imap'),
+    api('GET','/settings/pudo'),
+    api('GET','/settings/collection-contact'),
+  ]);
   const shop = shopRes&&shopRes.success?shopRes.data:{};
   const imap = imapRes&&imapRes.success?imapRes.data:{};
+  const pudo = pudoRes&&pudoRes.success?pudoRes.data:{};
   const coll = collRes&&collRes.success?collRes.data:{};
   let html = `<div class="grid grid-cols-1 md:grid-cols-2 gap-6">`;
   // Shopify
@@ -802,9 +808,21 @@ async function renderSettings() {
   html += `<div class="flex gap-2 mt-4"><button onclick="saveSettingsImap()" class="flex-1 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button>`;
   if (imap.configured) html += `<button onclick="deleteSettingsImap()" class="px-4 py-2.5 bg-red-50 text-red-500 font-semibold rounded-full text-sm hover:bg-red-100 transition-all">Remove</button>`;
   html += `</div></div>`;
+  // PUDO
+  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">PUDO Courier</h3>`;
+  if (pudo.configured) {
+    html += `<div class="flex items-center gap-2 mb-4"><span class="w-2 h-2 rounded-full bg-green-400"></span><span class="text-sm text-green-600 font-medium">Configured</span><span class="text-xs text-gray-400 ml-2">${pudo.pudo_username||''}</span></div>`;
+  }
+  html += `<div class="space-y-3">`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Email</label><input id="set-pudo-user" value="${pudo.pudo_username||''}" placeholder="account email" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Password</label><input id="set-pudo-pass" type="password" placeholder="${pudo.configured?'leave blank to keep current':''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">API Key</label><input id="set-pudo-key" type="password" placeholder="${pudo.configured?'leave blank to keep current':''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `</div>`;
+  html += `<div class="flex gap-2 mt-4"><button onclick="saveSettingsPudo()" class="flex-1 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button>`;
+  if (pudo.configured) html += `<button onclick="deleteSettingsPudo()" class="px-4 py-2.5 bg-red-50 text-red-500 font-semibold rounded-full text-sm hover:bg-red-100 transition-all">Remove</button>`;
+  html += `</div></div>`;
   // Collection
-  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Collection Contact</h3>`;
-  html += `<div class="space-y-3"><div><label class="block text-xs text-gray-400 mb-1">Name</label><input id="set-coll-name" value="${coll.contact_name||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Collection Contact</h3>`;  html += `<div class="space-y-3"><div><label class="block text-xs text-gray-400 mb-1">Name</label><input id="set-coll-name" value="${coll.contact_name||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Email</label><input id="set-coll-email" value="${coll.contact_email||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Phone</label><input id="set-coll-phone" value="${coll.contact_phone||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Terminal ID</label><input id="set-coll-terminal" value="${coll.collection_terminal_id||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
@@ -833,6 +851,24 @@ async function deleteSettingsImap() {
   if (!confirm('Remove IMAP credentials? Email ingestion will stop for this tenant.')) return;
   const { data } = await api('DELETE', '/settings/imap');
   if (data.success) { toast('IMAP removed', 'info'); renderSettings(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+async function saveSettingsPudo() {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const body = { pudo_username: v('set-pudo-user') };
+  const pass = v('set-pudo-pass');
+  const key = v('set-pudo-key');
+  if (pass) body.pudo_password = pass;
+  if (key) body.pudo_api_key = key;
+  if (!body.pudo_username) { toast('Email required', 'error'); return; }
+  const { data } = await api('POST', '/settings/pudo', body);
+  if (data.success) { toast('PUDO saved', 'success'); setTimeout(() => renderSettings(), 500); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+async function deleteSettingsPudo() {
+  if (!confirm('Remove PUDO credentials? Fulfillment will stop for this tenant.')) return;
+  const { data } = await api('DELETE', '/settings/pudo');
+  if (data.success) { toast('PUDO removed', 'info'); renderSettings(); }
   else toast(data.error?.message || 'Failed', 'error');
 }
 async function saveSettingsCollection() { const b={contact_name:document.getElementById('set-coll-name').value,contact_email:document.getElementById('set-coll-email').value,contact_phone:document.getElementById('set-coll-phone').value,collection_terminal_id:document.getElementById('set-coll-terminal').value}; const{data}=await api('POST','/settings/collection-contact',b); if(data.success)toast('Collection contact saved','success');else toast(data.error?.message||'Failed','error'); }

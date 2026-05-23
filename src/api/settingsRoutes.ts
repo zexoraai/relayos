@@ -227,6 +227,79 @@ router.get('/pudo', async (req: AuthenticatedRequest, res: Response) => {
   });
 });
 
+// POST /settings/pudo - Upsert PUDO credentials post-onboarding.
+// Used by the Settings page to fix or rotate PUDO creds (api key + login)
+// without going back through onboarding.
+router.post('/pudo', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const { pudo_username, pudo_password, pudo_api_key } = req.body;
+
+  if (!pudo_username) {
+    return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'pudo_username is required' } });
+  }
+
+  // Locate the courier integration row (created during onboarding when courier=pudo was picked).
+  const courierIntegration = await db('tenant_courier_integrations')
+    .where({ tenant_id: tenantId, courier: 'pudo' })
+    .first();
+  if (!courierIntegration) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NO_COURIER', message: 'PUDO courier integration not found. Pick PUDO as your courier in onboarding first.' },
+    });
+  }
+
+  const existing = await db('tenant_pudo_settings')
+    .where({ tenant_id: tenantId, courier_integration_id: courierIntegration.id })
+    .first();
+
+  // password + api_key are optional on update — blank means "keep current"
+  if (!existing && (!pudo_password || !pudo_api_key)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'MISSING_FIELDS', message: 'pudo_password and pudo_api_key are required for first save' },
+    });
+  }
+
+  const data: Record<string, any> = {
+    tenant_id: tenantId,
+    courier_integration_id: courierIntegration.id,
+    pudo_username,
+  };
+  if (pudo_password) data.encrypted_pudo_password = encrypt(pudo_password);
+  if (pudo_api_key) data.encrypted_pudo_api_key = encrypt(pudo_api_key);
+
+  if (existing) {
+    await db('tenant_pudo_settings').where({ id: existing.id }).update({ ...data, updated_at: new Date() });
+  } else {
+    await db('tenant_pudo_settings').insert(data);
+  }
+
+  await db('tenant_courier_integrations')
+    .where({ id: courierIntegration.id })
+    .update({ is_configured: true, updated_at: new Date() });
+
+  log.info({ tenantId, user: pudo_username }, 'PUDO credentials updated from dashboard');
+
+  return res.status(200).json({
+    success: true,
+    data: { message: 'PUDO credentials saved', is_configured: true },
+  });
+});
+
+// DELETE /settings/pudo - Remove PUDO credentials. Stops fulfillment for this tenant.
+router.delete('/pudo', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+
+  await db('tenant_pudo_settings').where({ tenant_id: tenantId }).delete();
+
+  log.info({ tenantId }, 'PUDO credentials removed from dashboard');
+
+  return res.status(200).json({ success: true, data: { message: 'PUDO credentials removed' } });
+});
+
 // GET /settings/collection-contact
 router.get('/collection-contact', async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
