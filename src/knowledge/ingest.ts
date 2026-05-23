@@ -92,7 +92,7 @@ export async function ingestSitemap(args: {
   pathPrefix?: string;
 }): Promise<IngestSummary> {
   const db = getDb();
-  const maxPages = Math.min(args.maxPages || 50, 200);
+  const maxPages = Math.min(args.maxPages || 200, 500);
 
   const source = await ensureSource(args.tenantId, {
     source_type: 'sitemap',
@@ -103,18 +103,58 @@ export async function ingestSitemap(args: {
 
   await markSyncing(source.id);
   try {
-    const fetched = await fetchUrl(args.sitemapUrl);
-    if (fetched.status >= 400) throw new Error(`Sitemap fetch failed (${fetched.status})`);
-    const sitemap = extractSitemap(fetched.body.toString('utf8'));
-    let urls = sitemap.links || [];
+    /**
+     * Resolve all leaf page URLs by recursively expanding sitemap-indexes.
+     * Shopify and most modern sites use a top-level sitemap.xml that points to
+     * per-section sitemaps (sitemap_products_1.xml, sitemap_pages_1.xml, …).
+     * Each of those then contains the actual page URLs.
+     *
+     * A "leaf" URL is anything that is not itself a sitemap-XML.
+     */
+    const visited = new Set<string>();
+    const leafUrls: string[] = [];
 
+    const expandSitemap = async (url: string, depth: number): Promise<void> => {
+      if (depth > 4) return; // safety
+      if (visited.has(url)) return;
+      visited.add(url);
+      const fetched = await fetchUrl(url);
+      if (fetched.status >= 400) return;
+      const text = fetched.body.toString('utf8');
+      const sm = extractSitemap(text);
+      const links = sm.links || [];
+      // Heuristic: if the URL or its links look like sitemaps (path matches *sitemap*.xml),
+      // treat it as a sitemap-index and recurse. Otherwise its links are leaf pages.
+      const looksLikeSitemap = (u: string) => /sitemap[^/]*\.xml(\?|$)/i.test(u);
+
+      if (links.length === 0) {
+        // No <loc> children — treat the URL itself as a leaf page if it isn't a sitemap.
+        if (!looksLikeSitemap(url)) leafUrls.push(url);
+        return;
+      }
+      for (const child of links) {
+        if (looksLikeSitemap(child)) {
+          await expandSitemap(child, depth + 1);
+        } else {
+          leafUrls.push(child);
+        }
+      }
+    };
+
+    await expandSitemap(args.sitemapUrl, 0);
+
+    let urls = leafUrls;
     if (args.pathPrefix) {
       const prefix = args.pathPrefix;
       urls = urls.filter((u) => {
         try { return new URL(u).pathname.startsWith(prefix); } catch { return false; }
       });
     }
+    // De-duplicate after expansion
+    urls = Array.from(new Set(urls));
     if (urls.length > maxPages) urls = urls.slice(0, maxPages);
+
+    log.info({ sitemapUrl: args.sitemapUrl, leafCount: leafUrls.length, fetchedCount: urls.length }, 'Sitemap expansion complete');
 
     const aggregate: IngestSummary = {
       source_id: source.id,
@@ -131,9 +171,15 @@ export async function ingestSitemap(args: {
         const ct = fetchedPage.content_type.toLowerCase();
         let extracted: ExtractedContent;
         if (ct.includes('application/pdf')) extracted = await extractPdf(fetchedPage.body);
-        else if (ct.includes('html') || ct.includes('xml')) extracted = extractHtml(fetchedPage.body.toString('utf8'), u);
+        else if (ct.includes('html')) extracted = extractHtml(fetchedPage.body.toString('utf8'), u);
         else if (ct.includes('text/')) extracted = extractText(fetchedPage.body);
         else { aggregate.errors.push(`${u}: unsupported ct ${fetchedPage.content_type}`); continue; }
+
+        // Skip pages with too little extractable text — usually 404 / SPA shells.
+        if (!extracted.text || extracted.text.trim().length < 80) {
+          aggregate.errors.push(`${u}: empty body`);
+          continue;
+        }
 
         const sub = await upsertDocuments({
           tenantId: args.tenantId,
@@ -149,6 +195,22 @@ export async function ingestSitemap(args: {
         aggregate.errors.push(...sub.errors);
       } catch (err: any) {
         aggregate.errors.push(`${u}: ${err.message}`);
+      }
+    }
+
+    // Prune docs from previous syncs whose URL isn't in this run.
+    // Catches stale sitemap-XML docs left behind by the old (non-recursive) crawler.
+    if (urls.length > 0) {
+      const visitedUrls = new Set(urls);
+      const stale = await db('tenant_knowledge_documents')
+        .where({ source_id: source.id })
+        .whereNotIn('source_url', Array.from(visitedUrls))
+        .select('id', 'source_url');
+      if (stale.length > 0) {
+        await db('tenant_knowledge_documents')
+          .whereIn('id', stale.map((s: any) => s.id))
+          .delete();
+        log.info({ sourceId: source.id, prunedCount: stale.length }, 'Pruned stale knowledge documents from prior crawl');
       }
     }
 
