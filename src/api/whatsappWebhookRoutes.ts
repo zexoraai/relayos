@@ -55,11 +55,27 @@ router.post('/webhook', async (req: Request, res: Response) => {
         if (!phoneNumberId) continue;
 
         const db = getDb();
-        const settings = await db('whatsapp_settings').where({ phone_number_id: phoneNumberId }).first();
-        if (!settings) {
+        // Prefer enabled rows; if multiple tenants share a phone_number_id (e.g. after
+        // a data import), take the most-recently-updated one and warn so the operator
+        // can clean up. A real prod system should keep this column unique-per-active-row.
+        const matchingRows = await db('whatsapp_settings')
+          .where({ phone_number_id: phoneNumberId, enabled: true })
+          .orderBy('updated_at', 'desc');
+        if (matchingRows.length === 0) {
           log.warn({ phoneNumberId }, 'No WhatsApp tenant found for inbound webhook');
           continue;
         }
+        if (matchingRows.length > 1) {
+          log.error(
+            {
+              phoneNumberId,
+              candidateTenantIds: matchingRows.map((r: any) => r.tenant_id),
+              picked: matchingRows[0].tenant_id,
+            },
+            'Multiple tenants share the same WhatsApp phone_number_id — using most-recently-updated. Clean this up in Settings → WhatsApp.',
+          );
+        }
+        const settings = matchingRows[0];
 
         // Handle inbound messages
         const messages = value?.messages || [];
