@@ -203,7 +203,20 @@ export async function dispatchByPurpose(args: {
 /**
  * Save WhatsApp credentials for a tenant, encrypting the access token.
  * Also seeds default templates if none exist yet.
+ *
+ * Throws WhatsAppPhoneClaimedError if another active tenant already claims this
+ * phone_number_id. Inbound webhooks key off phone_number_id, so two tenants
+ * with the same number would race to receive the same customer messages.
  */
+export class WhatsAppPhoneClaimedError extends Error {
+  public claimedByTenantId: string;
+  constructor(phoneNumberId: string, claimedByTenantId: string) {
+    super(`WhatsApp phone_number_id ${phoneNumberId} is already in use by another tenant`);
+    this.name = 'WhatsAppPhoneClaimedError';
+    this.claimedByTenantId = claimedByTenantId;
+  }
+}
+
 export async function saveSettings(args: {
   tenantId: string;
   phoneNumberId: string;
@@ -214,6 +227,21 @@ export async function saveSettings(args: {
 }): Promise<void> {
   const db = getDb();
   const existing = await db('whatsapp_settings').where({ tenant_id: args.tenantId }).first();
+
+  // Block another tenant from claiming the same phone_number_id. Inbound
+  // webhooks route by phone_number_id, so duplicates cause silent message
+  // misrouting. We allow the same tenant to update its own row.
+  const claim = await db('whatsapp_settings')
+    .where({ phone_number_id: args.phoneNumberId, enabled: true })
+    .whereNot({ tenant_id: args.tenantId })
+    .first();
+  if (claim) {
+    log.warn(
+      { tenantId: args.tenantId, phoneNumberId: args.phoneNumberId, claimedBy: claim.tenant_id },
+      'Refusing WhatsApp save — phone_number_id already in use by another tenant',
+    );
+    throw new WhatsAppPhoneClaimedError(args.phoneNumberId, claim.tenant_id);
+  }
 
   const data = {
     tenant_id: args.tenantId,

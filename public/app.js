@@ -2254,10 +2254,34 @@ async function revertPacking(orderId) {
 // ---- Chatbot Config ----
 
 async function renderChatbotConfig() {
-  const { data } = await api('GET', '/chatbot-settings');
+  const [{ data }, { data: hRes }] = await Promise.all([
+    api('GET', '/chatbot-settings'),
+    api('GET', '/knowledge/health'),
+  ]);
   const s = data && data.success ? (data.data.configured ? data.data : data.data.defaults || {}) : {};
+  const health = hRes && hRes.success ? hRes.data : null;
 
   let html = '';
+
+  // Knowledge readiness banner — surface upfront when KB is empty/warming
+  if (health && health.status !== 'healthy' && (health.messages || []).length) {
+    const tone = health.status === 'empty'
+      ? 'bg-red-50 border-red-200 text-red-700'
+      : 'bg-amber-50 border-amber-200 text-amber-700';
+    const icon = health.status === 'empty' ? '⚠' : 'ℹ';
+    const docs = health.documents || {};
+    html += `<div class="rounded-2xl border ${tone} p-4 mb-6">`;
+    html += `<div class="flex items-start gap-3">`;
+    html += `<span class="text-lg leading-none">${icon}</span>`;
+    html += `<div class="flex-1">`;
+    html += `<div class="font-semibold text-sm mb-1">${health.status === 'empty' ? 'Chatbot has no knowledge yet' : 'Knowledge base is still warming up'}</div>`;
+    health.messages.forEach((m) => {
+      html += `<div class="text-xs leading-relaxed">${escapeHtml(m)}</div>`;
+    });
+    html += `<div class="text-xs mt-2 opacity-75">Sources: ${health.sources?.total || 0} (${health.sources?.completed || 0} synced) · Documents: ${docs.total || 0} · Embedded: ${docs.embedded || 0}/${docs.total || 0}</div>`;
+    html += `<div class="mt-2"><button onclick="switchTab('knowledge')" class="text-xs font-semibold underline">Open Knowledge tab →</button></div>`;
+    html += `</div></div></div>`;
+  }
 
   // Personality card
   html += `<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">`;

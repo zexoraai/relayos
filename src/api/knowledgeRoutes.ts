@@ -269,4 +269,87 @@ async function ensureManualSource(tenantId: string): Promise<any> {
   return row;
 }
 
+/**
+ * GET /knowledge/health
+ *
+ * Quick readiness check for the chatbot knowledge base.
+ * Returns counts so the dashboard can show a "your chatbot has nothing to work
+ * with yet" banner before customers start asking questions and getting "I don't know".
+ *
+ * status:
+ *   - "healthy"  : sources>=1, docs>=10, embedded_pct>=0.5
+ *   - "warming"  : sources>=1 but embeddings still catching up
+ *   - "empty"    : no sources / no docs
+ */
+router.get('/health', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+
+  const sourceRows = await db('tenant_knowledge_sources')
+    .where({ tenant_id: tenantId })
+    .select('status');
+  const sources = {
+    total: sourceRows.length,
+    completed: sourceRows.filter((s: any) => s.status === 'completed').length,
+    syncing: sourceRows.filter((s: any) => s.status === 'syncing').length,
+    failed: sourceRows.filter((s: any) => s.status === 'failed').length,
+  };
+
+  const [{ count: docCount }] = await db('tenant_knowledge_documents')
+    .where({ tenant_id: tenantId })
+    .count<{ count: string }[]>('id as count');
+  const [{ count: embeddedCount }] = await db('tenant_knowledge_documents')
+    .where({ tenant_id: tenantId })
+    .whereNotNull('embedding')
+    .count<{ count: string }[]>('id as count');
+  const [{ count: dirtyCount }] = await db('tenant_knowledge_documents')
+    .where({ tenant_id: tenantId, embedding_dirty: true })
+    .count<{ count: string }[]>('id as count');
+
+  const totalDocs = parseInt(docCount as string, 10) || 0;
+  const embedded = parseInt(embeddedCount as string, 10) || 0;
+  const pendingEmbeddings = parseInt(dirtyCount as string, 10) || 0;
+  const embeddedPct = totalDocs > 0 ? embedded / totalDocs : 0;
+
+  let status: 'healthy' | 'warming' | 'empty';
+  const messages: string[] = [];
+  if (sources.total === 0 || totalDocs === 0) {
+    status = 'empty';
+    messages.push(
+      'Your chatbot has no knowledge yet. Add a website, sitemap, or upload documents under the Knowledge tab so it can answer customer questions about your store.',
+    );
+  } else if (totalDocs < 10) {
+    status = 'warming';
+    messages.push(
+      `Only ${totalDocs} document chunk${totalDocs === 1 ? '' : 's'} indexed. Add more sources for better answers.`,
+    );
+  } else if (embeddedPct < 0.5) {
+    status = 'warming';
+    messages.push(
+      `${embedded}/${totalDocs} documents embedded (${pendingEmbeddings} still pending). Embeddings finish in the background — give it a few minutes.`,
+    );
+  } else {
+    status = 'healthy';
+  }
+
+  if (sources.failed > 0) {
+    messages.push(`${sources.failed} knowledge source${sources.failed === 1 ? '' : 's'} failed to sync. Check the Knowledge tab to retry.`);
+  }
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      status,
+      messages,
+      sources,
+      documents: {
+        total: totalDocs,
+        embedded,
+        pending_embeddings: pendingEmbeddings,
+        embedded_pct: embeddedPct,
+      },
+    },
+  });
+});
+
 export default router;

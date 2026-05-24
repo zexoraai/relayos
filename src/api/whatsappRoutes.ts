@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest, authMiddleware } from './middleware';
 import { getDb } from '../db/connection';
-import { saveSettings, dispatchByPurpose } from '../whatsapp';
+import { saveSettings, dispatchByPurpose, WhatsAppPhoneClaimedError } from '../whatsapp';
 import { encrypt, decrypt } from '../crypto';
 import { createMetaTemplate, getMetaTemplate, deleteMetaTemplate, validateTemplateName, convertBodyForMeta, MetaTemplateCategory } from '../whatsapp/metaTemplates';
 import { createChildLogger } from '../observability/logger';
@@ -55,14 +55,27 @@ router.post('/settings', async (req: AuthenticatedRequest, res: Response) => {
     return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'access_token is required' } });
   }
 
-  await saveSettings({
-    tenantId,
-    phoneNumberId: phone_number_id,
-    accessToken: access_token,
-    businessAccountId: business_account_id,
-    displayPhoneNumber: display_phone_number,
-    verifyToken: verify_token,
-  });
+  try {
+    await saveSettings({
+      tenantId,
+      phoneNumberId: phone_number_id,
+      accessToken: access_token,
+      businessAccountId: business_account_id,
+      displayPhoneNumber: display_phone_number,
+      verifyToken: verify_token,
+    });
+  } catch (err: any) {
+    if (err instanceof WhatsAppPhoneClaimedError) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'PHONE_NUMBER_ID_IN_USE',
+          message: 'Another tenant on this RelayOS instance is already using this WhatsApp phone number ID. Each Meta phone_number_id can only be claimed by one tenant.',
+        },
+      });
+    }
+    throw err;
+  }
 
   log.info({ tenantId }, 'WhatsApp settings saved');
   return res.status(200).json({ success: true, data: { message: 'WhatsApp settings saved' } });
