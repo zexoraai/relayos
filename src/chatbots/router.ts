@@ -45,9 +45,17 @@ export async function classifyIntent(message: string, lastIntent?: string | null
       ],
       context: { module: 'intent-router' },
     });
+    // Bias for helpfulness: if the LLM said unknown but the message is a real
+    // question, route to tenant_info (the safe default — it grounds in the KB
+    // and will say so if it doesn't know). Real-world messages should rarely
+    // be truly unknown.
+    if (data.intent === 'unknown' && message.trim().length >= 3) {
+      return { intent: 'tenant_info', confidence: Math.max(data.confidence, 0.6), reason: data.reason || 'fallback unknown→tenant_info' };
+    }
     return data;
   } catch (err: any) {
-    log.warn({ error: err.message }, 'Intent classification failed; defaulting to unknown');
-    return { intent: 'unknown', confidence: 0, reason: 'classifier_error' };
+    log.warn({ error: err.message }, 'Intent classification failed; defaulting to tenant_info');
+    // Soft-fail: send to tenant_info instead of dropping into the "unknown" UX.
+    return { intent: 'tenant_info', confidence: 0.5, reason: 'classifier_error_fallback' };
   }
 }

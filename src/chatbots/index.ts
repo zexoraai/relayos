@@ -102,8 +102,10 @@ export async function handleInbound(msg: InboundMessage): Promise<ChatbotReply |
   }
 
   // 5. Dispatch to matching agent
-  // Low-confidence handling: if router isn't sure, ask a clarifying question
-  if (cls.confidence < 0.6 && cls.intent !== 'small_talk' && cls.intent !== 'human_handoff') {
+  // Low-confidence handling: only ask a clarifying question for very low confidence
+  // ambiguous text. Otherwise route to the best-guess agent — they ground in their
+  // own data (orders DB / knowledge base) and will say so if they can't help.
+  if (cls.confidence < 0.4 && cls.intent !== 'small_talk' && cls.intent !== 'human_handoff') {
     agent = 'system';
     reply = "I'm not sure I understood. Are you asking about your order (tracking, delivery, PIN), or about our store (shipping, returns, products)?";
     await db('chat_messages').insert({ conversation_id: conversation.id, tenant_id: msg.tenantId, role: 'assistant', content: reply, intent: cls.intent, agent });
