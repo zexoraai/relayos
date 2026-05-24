@@ -333,8 +333,19 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
     if (llmRes.ran) {
       llm = { ran: true, verdict: llmRes.verdict, confidence: llmRes.confidence, reasons: llmRes.reasons, flags: llmRes.flags, summary: llmRes.summary };
 
-      // Mode shadow: never let LLM change the verdict.
-      const llmMergedVerdict = rules.mode === 'shadow' ? decision.verdict : mergeVerdicts(decision.verdict, llmRes.verdict);
+      // Mode-aware merge:
+      //   shadow   : LLM never changes the verdict (record-only)
+      //   advisory : LLM may escalate to 'review' but NEVER to 'reject'.
+      //              Anything the LLM dislikes still ends up in the human queue.
+      //   strict   : LLM may escalate all the way to 'reject' (current full power).
+      let llmCappedVerdict = llmRes.verdict;
+      if (rules.mode === 'advisory' && llmCappedVerdict === 'reject') {
+        llmCappedVerdict = 'review';
+      }
+      const llmMergedVerdict = rules.mode === 'shadow'
+        ? decision.verdict
+        : mergeVerdicts(decision.verdict, llmCappedVerdict);
+
       finalVerdict = llmMergedVerdict;
       if (llmRes.flags.length) mergedFlags = Array.from(new Set([...mergedFlags, ...llmRes.flags]));
       if (llmRes.summary && llmMergedVerdict !== 'approve') {

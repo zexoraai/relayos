@@ -192,4 +192,44 @@ router.post('/evaluations/:id/resolve', async (req: AuthenticatedRequest, res: R
   return res.status(200).json({ success: true, data: result });
 });
 
+/**
+ * POST /caretaker/evaluations/:id/reopen
+ *
+ * Convert a previously-resolved evaluation (typically rejected) back into
+ * a pending review so the operator can edit + approve it. Useful when the
+ * LLM auto-rejected something the human disagrees with.
+ *
+ * Sets the evaluation's verdict back to 'review' and clears resolution.
+ * Flips the pipeline_job back to pending_review.
+ */
+router.post('/evaluations/:id/reopen', async (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = req.tenant!.tenantId;
+  const userEmail = req.tenant!.email || 'unknown';
+  const { id } = req.params as { id: string };
+
+  const db = getDb();
+  const ev = await db('caretaker_evaluations').where({ id, tenant_id: tenantId }).first();
+  if (!ev) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Evaluation not found' } });
+  }
+
+  await db('caretaker_evaluations').where({ id }).update({
+    verdict: 'review',
+    resolution: null,
+    resolved_by: null,
+    resolved_at: null,
+    summary: ev.summary ? `${ev.summary} (reopened by ${userEmail})` : `Reopened by ${userEmail}`,
+  });
+
+  await db('pipeline_jobs').where({ id: ev.pipeline_job_id }).update({
+    status: 'pending_review',
+    caretaker_verdict: 'review',
+    last_error: null,
+    updated_at: new Date(),
+  });
+
+  log.info({ evaluationId: id, pipelineJobId: ev.pipeline_job_id, by: userEmail }, 'Evaluation reopened for review');
+  return res.status(200).json({ success: true, data: { id, verdict: 'review' } });
+});
+
 export default router;

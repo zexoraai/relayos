@@ -762,7 +762,15 @@ async function renderCaretaker() {
       html += `<div class="p-3 rounded-2xl border border-gray-100">`;
       html += `<div class="flex items-center justify-between mb-1"><span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>${badge(e.verdict==='approve'?'completed':e.verdict==='review'?'pending_review':'failed', e.verdict)}</div>`;
       html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary||'-')}</div>`;
-      if (e.verdict==='review'&&!e.resolution) html += `<div class="flex gap-2 mt-2"><button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button></div>`;
+      let actions = '';
+      if (e.verdict==='review' && !e.resolution) {
+        actions = `<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
+      } else if (e.verdict==='reject' || e.resolution==='rejected') {
+        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen for review</button>`;
+      } else if (e.verdict==='approve' && !e.resolution) {
+        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-gray-50 text-gray-600 rounded-full text-xs font-semibold hover:bg-gray-100" title="Convert to pending review">Reopen</button>`;
+      }
+      if (actions) html += `<div class="flex gap-2 mt-2">${actions}</div>`;
       html += `</div>`;
     });
     html += `</div>`;
@@ -776,6 +784,17 @@ async function saveCaretakerRules() {
   if (data.success) toast('Rules saved','success'); else toast(data.error?.message||'Failed','error');
 }
 async function resolveCk(id, resolution) { await api('POST',`/caretaker/evaluations/${id}/resolve`,{resolution}); toast(`Evaluation ${resolution}`,'success'); renderCaretaker(); }
+
+async function reopenCk(id) {
+  if (!confirm('Reopen this evaluation as a pending review?\n\nYou will be able to edit the order data and approve it from the queue.')) return;
+  const { data } = await api('POST', `/caretaker/evaluations/${id}/reopen`);
+  if (data?.success) {
+    toast('Reopened — find it under pending reviews', 'success');
+    renderCaretaker();
+  } else {
+    toast(data?.error?.message || 'Failed to reopen', 'error');
+  }
+}
 
 async function openReviewModal(evaluationId) {
   // Fetch snapshot of pipeline data + flags so the reviewer can edit before approving.
