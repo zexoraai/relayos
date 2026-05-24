@@ -74,19 +74,79 @@ router.get('/evaluations', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
- * POST /caretaker/evaluations/:id/resolve { resolution: 'approved' | 'rejected' }
- * Marks the review resolved. If approved, resumes the pipeline from where it paused.
+ * GET /caretaker/evaluations/:id
+ *
+ * Returns the evaluation, the current snapshot of pipeline-extracted data
+ * (so the dashboard can pre-fill the edit form), and any prior reviewer
+ * overrides. Used by the override-and-approve UI.
+ */
+router.get('/evaluations/:id', async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const { id } = req.params as { id: string };
+
+  const ev = await db('caretaker_evaluations').where({ id, tenant_id: tenantId }).first();
+  if (!ev) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Evaluation not found' } });
+  }
+
+  // Pull the customer_data + locker stage outputs for this pipeline job so
+  // the UI can show what the AI extracted (and what the reviewer is overriding).
+  const stages = await db('pipeline_stage_results')
+    .where({ pipeline_job_id: ev.pipeline_job_id })
+    .orderBy('created_at', 'asc')
+    .select('stage', 'status', 'output_data', 'created_at');
+
+  const findStage = (name: string) => stages.find((s: any) => s.stage === name);
+  const parse = (v: any) => {
+    if (!v) return null;
+    if (typeof v !== 'string') return v;
+    try { return JSON.parse(v); } catch { return null; }
+  };
+
+  const customerData = parse(findStage('CUSTOMER_DATA')?.output_data);
+  const lockersResolved = parse(findStage('LOCKERS_RESOLVED')?.output_data);
+  const dataExtracted = parse(findStage('DATA_EXTRACTED')?.output_data);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      evaluation: ev,
+      snapshot: {
+        customer_data: customerData,
+        lockers_resolved: lockersResolved,
+        data_extracted: dataExtracted,
+      },
+    },
+  });
+});
+
+/**
+ * POST /caretaker/evaluations/:id/resolve
+ * Body:
+ *   { resolution: 'approved' | 'rejected',
+ *     overrides?: { customer_name?, customer_phone?, delivery_method?, delivery_address?, line_items?, locker? },
+ *     notes?: string }
+ *
+ * On approve, the pipeline is re-enqueued; the next pass merges `overrides`
+ * over the AI-extracted data via executeCustomerData.
  */
 router.post('/evaluations/:id/resolve', async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const userEmail = req.tenant!.email || 'unknown';
   const { id } = req.params as { id: string };
-  const { resolution } = req.body;
+  const { resolution, overrides, notes } = req.body || {};
 
   if (!['approved', 'rejected'].includes(resolution)) {
     return res.status(400).json({
       success: false,
       error: { code: 'BAD_RESOLUTION', message: 'resolution must be approved or rejected' },
+    });
+  }
+  if (overrides !== undefined && (overrides === null || typeof overrides !== 'object' || Array.isArray(overrides))) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'BAD_OVERRIDES', message: 'overrides must be a JSON object' },
     });
   }
 
@@ -96,15 +156,20 @@ router.post('/evaluations/:id/resolve', async (req: AuthenticatedRequest, res: R
     return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Evaluation not found' } });
   }
 
-  const result = await resolveReview({ evaluationId: id, resolution, resolvedBy: userEmail });
+  const result = await resolveReview({
+    evaluationId: id,
+    resolution,
+    resolvedBy: userEmail,
+    reviewerOverrides: overrides ?? null,
+    reviewerNotes: typeof notes === 'string' ? notes : null,
+  });
 
   // If approved, resume pipeline. If rejected, just mark the job rejected.
   if (resolution === 'approved') {
     const job = await db('pipeline_jobs').where({ id: ev.pipeline_job_id }).first();
     if (job) {
       // Re-run from the beginning; the courier-submitted stage is idempotent on order_number,
-      // and the caretaker will see verdict already set so it allows pass-through. (We mark
-      // the job back to processing first.)
+      // and the caretaker short-circuits because the prior evaluation was approved.
       await db('pipeline_jobs').where({ id: job.id }).update({
         status: 'processing',
         updated_at: new Date(),

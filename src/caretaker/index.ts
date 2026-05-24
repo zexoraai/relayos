@@ -7,6 +7,15 @@ import { llmEvaluate, mergeVerdicts } from './llmEvaluator';
 
 const log = createChildLogger({ module: 'caretaker' });
 
+function parseJsonArray(v: unknown): string[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
+  }
+  return [];
+}
+
 /**
  * Verdicts returned by the caretaker.
  *  - approve: send to courier as planned
@@ -238,6 +247,50 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
   const db = getDb();
   const rules = await loadRules(input.tenantId);
 
+  // Short-circuit on resume: if a previous evaluation for this pipeline_job
+  // was already resolved as approved by a human, trust that decision and
+  // pass through. The new evaluation is recorded so the audit trail stays
+  // intact, but it inherits the verdict.
+  const priorApproved = await db('caretaker_evaluations')
+    .where({ pipeline_job_id: input.pipelineJobId, resolution: 'approved' })
+    .orderBy('resolved_at', 'desc')
+    .first();
+  if (priorApproved) {
+    const flags = parseJsonArray(priorApproved.flags);
+    const summary = `Auto-approved on resume — previously approved by ${priorApproved.resolved_by || 'reviewer'}${
+      priorApproved.summary ? ' (' + priorApproved.summary + ')' : ''
+    }`;
+    const [row] = await db('caretaker_evaluations')
+      .insert({
+        tenant_id: input.tenantId,
+        pipeline_job_id: input.pipelineJobId,
+        verdict: 'approve',
+        mode: rules.mode,
+        checks: JSON.stringify([]),
+        flags: JSON.stringify(flags),
+        summary,
+        llm_ran: false,
+        llm_verdict: null,
+        llm_confidence: null,
+        llm_reasons: JSON.stringify([]),
+        llm_flags: JSON.stringify([]),
+      })
+      .returning('id');
+
+    await db('pipeline_jobs').where({ id: input.pipelineJobId }).update({
+      caretaker_verdict: 'approve',
+      caretaker_evaluation_id: row.id,
+      updated_at: new Date(),
+    });
+
+    log.info(
+      { pipelineJobId: input.pipelineJobId, priorEvalId: priorApproved.id },
+      'Caretaker short-circuited (prior evaluation was approved)',
+    );
+
+    return { id: row.id, verdict: 'approve', mode: rules.mode, flags, checks: [], summary };
+  }
+
   if (!rules.enabled) {
     const out: CaretakerEvaluation = {
       id: null,
@@ -339,22 +392,33 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
 
 /**
  * Manually resolve a pending review.
- * Returns the updated evaluation row.
+ * Optionally apply reviewer-supplied overrides (typed via the resolve API)
+ * and reviewer notes. The override blob is shallow-merged on the next
+ * pipeline pass via executeCustomerData.
  */
 export async function resolveReview(args: {
   evaluationId: string;
   resolution: 'approved' | 'rejected';
   resolvedBy: string;
+  reviewerOverrides?: Record<string, unknown> | null;
+  reviewerNotes?: string | null;
 }): Promise<{ evaluation_id: string; pipeline_job_id: string; verdict: CaretakerVerdict; resolution: 'approved' | 'rejected' } | null> {
   const db = getDb();
   const ev = await db('caretaker_evaluations').where({ id: args.evaluationId }).first();
   if (!ev) return null;
 
-  await db('caretaker_evaluations').where({ id: args.evaluationId }).update({
+  const updates: Record<string, unknown> = {
     resolution: args.resolution,
     resolved_by: args.resolvedBy,
     resolved_at: new Date(),
-  });
+  };
+  if (args.reviewerOverrides !== undefined) {
+    updates.reviewer_overrides = args.reviewerOverrides ? JSON.stringify(args.reviewerOverrides) : null;
+  }
+  if (args.reviewerNotes !== undefined) {
+    updates.reviewer_notes = args.reviewerNotes;
+  }
+  await db('caretaker_evaluations').where({ id: args.evaluationId }).update(updates);
 
   // The pipeline job's verdict reflects the final decision so workers/UI can act on it.
   const newVerdict: CaretakerVerdict = args.resolution === 'approved' ? 'approve' : 'reject';
@@ -368,6 +432,7 @@ export async function resolveReview(args: {
     pipelineJobId: ev.pipeline_job_id,
     resolution: args.resolution,
     resolvedBy: args.resolvedBy,
+    overrideKeys: args.reviewerOverrides ? Object.keys(args.reviewerOverrides) : [],
   }, 'Caretaker review resolved');
 
   return {

@@ -39,7 +39,7 @@ export async function executeCustomerData(
     ? enrichment.line_items.map(li => ({ name: li.name, quantity: li.quantity }))
     : [];
 
-  const result: CustomerData = {
+  let result: CustomerData = {
     delivery_address: location.delivery_address,
     OrderNumber: extracted.order_number,
     deliverMethod: extracted.delivery_method,
@@ -49,6 +49,45 @@ export async function executeCustomerData(
     upload_type: extracted.upload_type,
     line_items: lineItems,
   };
+
+  // Apply reviewer overrides if a human approved this job with edits.
+  // We read the most recent caretaker_evaluation for this pipeline_job_id and,
+  // if it has reviewer_overrides set, shallow-merge the editable fields.
+  // Address is deep-merged (street/suburb/city/etc), line_items replaces wholesale if provided.
+  const lastEval = await db('caretaker_evaluations')
+    .where({ pipeline_job_id: jobId })
+    .orderBy('created_at', 'desc')
+    .first();
+  const overridesRaw = lastEval?.reviewer_overrides;
+  if (overridesRaw) {
+    let overrides: any = overridesRaw;
+    if (typeof overrides === 'string') {
+      try { overrides = JSON.parse(overrides); } catch { overrides = null; }
+    }
+    if (overrides && typeof overrides === 'object') {
+      if (typeof overrides.customer_name === 'string' && overrides.customer_name.trim()) {
+        result.customerName = overrides.customer_name.trim();
+      }
+      if (typeof overrides.customer_phone === 'string' && overrides.customer_phone.trim()) {
+        result.customerPhone = overrides.customer_phone.replace(/[\s\-\(\)]/g, '').trim();
+      }
+      if (typeof overrides.delivery_method === 'string' && overrides.delivery_method.trim()) {
+        result.deliverMethod = overrides.delivery_method.trim();
+      }
+      if (overrides.delivery_address && typeof overrides.delivery_address === 'object') {
+        result.delivery_address = { ...result.delivery_address, ...overrides.delivery_address };
+      }
+      if (Array.isArray(overrides.line_items) && overrides.line_items.length > 0) {
+        result.line_items = overrides.line_items
+          .filter((li: any) => li && typeof li.name === 'string' && li.name.trim())
+          .map((li: any) => ({
+            name: li.name.trim(),
+            quantity: Number.isFinite(Number(li.quantity)) ? Number(li.quantity) : 1,
+          }));
+      }
+      log.info({ jobId, overriddenFields: Object.keys(overrides) }, 'Reviewer overrides applied to customer data');
+    }
+  }
 
   await db('pipeline_stage_results').insert({
     pipeline_job_id: jobId,

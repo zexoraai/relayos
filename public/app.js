@@ -762,7 +762,7 @@ async function renderCaretaker() {
       html += `<div class="p-3 rounded-2xl border border-gray-100">`;
       html += `<div class="flex items-center justify-between mb-1"><span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>${badge(e.verdict==='approve'?'completed':e.verdict==='review'?'pending_review':'failed', e.verdict)}</div>`;
       html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary||'-')}</div>`;
-      if (e.verdict==='review'&&!e.resolution) html += `<div class="flex gap-2 mt-2"><button onclick="resolveCk('${e.id}','approved')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button></div>`;
+      if (e.verdict==='review'&&!e.resolution) html += `<div class="flex gap-2 mt-2"><button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button></div>`;
       html += `</div>`;
     });
     html += `</div>`;
@@ -776,6 +776,141 @@ async function saveCaretakerRules() {
   if (data.success) toast('Rules saved','success'); else toast(data.error?.message||'Failed','error');
 }
 async function resolveCk(id, resolution) { await api('POST',`/caretaker/evaluations/${id}/resolve`,{resolution}); toast(`Evaluation ${resolution}`,'success'); renderCaretaker(); }
+
+async function openReviewModal(evaluationId) {
+  // Fetch snapshot of pipeline data + flags so the reviewer can edit before approving.
+  const { data } = await api('GET', `/caretaker/evaluations/${evaluationId}`);
+  if (!data?.success) { toast('Failed to load evaluation', 'error'); return; }
+  const ev = data.data.evaluation;
+  const snap = data.data.snapshot || {};
+  const cd = snap.customer_data || {};
+  const addr = cd.delivery_address || {};
+  const items = Array.isArray(cd.line_items) ? cd.line_items : [];
+  const flags = Array.isArray(ev.flags) ? ev.flags : (typeof ev.flags === 'string' ? (() => { try { return JSON.parse(ev.flags); } catch { return []; } })() : []);
+
+  const existing = document.getElementById('review-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'review-modal-overlay';
+  overlay.className = 'fixed inset-0 bg-black/40 flex items-center justify-center z-[10000] p-4';
+  const itemsHtml = items.length
+    ? items.map((li, i) => `<div class="flex gap-2 mb-1" data-rv-item-row="${i}"><input class="flex-1 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0" data-rv-item-name value="${escapeHtml(li.name||'')}"><input class="w-20 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0" data-rv-item-qty type="number" min="1" value="${li.quantity||1}"><button onclick="this.parentElement.remove()" class="px-2 text-red-500 hover:text-red-700" title="Remove">&times;</button></div>`).join('')
+    : '';
+
+  overlay.innerHTML = `
+    <div class="bg-white rounded-3xl shadow-card w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <div class="p-6 border-b border-gray-100">
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="font-bold text-base">Review &amp; Approve</h3>
+          <button onclick="closeReviewModal()" class="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
+        </div>
+        <p class="text-xs text-gray-400">Edit any field below — your values will override what the AI extracted when the pipeline resumes.</p>
+        ${flags.length ? `<div class="mt-3 flex flex-wrap gap-1">${flags.map(f => `<span class="px-2 py-0.5 bg-amber-50 text-amber-700 text-[11px] rounded-full">${escapeHtml(f)}</span>`).join('')}</div>` : ''}
+        ${ev.summary ? `<div class="mt-2 text-xs text-gray-500">${escapeHtml(ev.summary)}</div>` : ''}
+      </div>
+
+      <div class="p-6 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div><label class="block text-xs text-gray-400 mb-1">Customer name</label><input id="rv-name" value="${escapeHtml(cd.customerName||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+          <div><label class="block text-xs text-gray-400 mb-1">Customer phone</label><input id="rv-phone" value="${escapeHtml(cd.customerPhone||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Delivery method</label>
+          <select id="rv-method" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">
+            ${['locker-to-locker','locker-to-door','door-to-locker','door-to-door'].map(m => `<option value="${m}"${cd.deliverMethod===m?' selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>
+
+        <div>
+          <h4 class="font-semibold text-sm mb-2">Delivery address</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="md:col-span-2"><label class="block text-xs text-gray-400 mb-1">Street</label><input id="rv-addr-street" value="${escapeHtml(addr.street_address||addr.entered_address||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+            <div><label class="block text-xs text-gray-400 mb-1">Suburb</label><input id="rv-addr-suburb" value="${escapeHtml(addr.suburb||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+            <div><label class="block text-xs text-gray-400 mb-1">City</label><input id="rv-addr-city" value="${escapeHtml(addr.city||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+            <div><label class="block text-xs text-gray-400 mb-1">Province</label><input id="rv-addr-province" value="${escapeHtml(addr.province||addr.region||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+            <div><label class="block text-xs text-gray-400 mb-1">Postal code</label><input id="rv-addr-postal" value="${escapeHtml(addr.postal_code||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-2"><h4 class="font-semibold text-sm">Line items</h4><button onclick="addReviewItem()" class="px-3 py-1 bg-surface-100 hover:bg-brand-100 rounded-full text-xs font-semibold">+ Add item</button></div>
+          <div id="rv-items">${itemsHtml}</div>
+        </div>
+
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Reviewer notes (optional)</label>
+          <textarea id="rv-notes" rows="2" placeholder="Why are you overriding? Saved for audit." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></textarea>
+        </div>
+      </div>
+
+      <div class="p-6 border-t border-gray-100 flex gap-2">
+        <button onclick="closeReviewModal()" class="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Cancel</button>
+        <button onclick="submitReview('${evaluationId}')" class="flex-1 py-2.5 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-full text-sm">Approve &amp; resume</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function closeReviewModal() {
+  const overlay = document.getElementById('review-modal-overlay');
+  if (overlay) overlay.remove();
+}
+
+function addReviewItem() {
+  const container = document.getElementById('rv-items');
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'flex gap-2 mb-1';
+  row.innerHTML = `<input class="flex-1 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0" data-rv-item-name placeholder="Item name"><input class="w-20 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0" data-rv-item-qty type="number" min="1" value="1"><button onclick="this.parentElement.remove()" class="px-2 text-red-500 hover:text-red-700" title="Remove">&times;</button>`;
+  container.appendChild(row);
+}
+
+async function submitReview(evaluationId) {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const overrides = {};
+  if (v('rv-name')) overrides.customer_name = v('rv-name');
+  if (v('rv-phone')) overrides.customer_phone = v('rv-phone');
+  if (v('rv-method')) overrides.delivery_method = v('rv-method');
+
+  const addr = {};
+  ['street','suburb','city','province','postal'].forEach(k => {
+    const val = v('rv-addr-' + k);
+    if (!val) return;
+    const key = k === 'street' ? 'street_address' : k === 'postal' ? 'postal_code' : k;
+    addr[key] = val;
+  });
+  if (Object.keys(addr).length) overrides.delivery_address = addr;
+
+  const itemsContainer = document.getElementById('rv-items');
+  if (itemsContainer) {
+    const rows = itemsContainer.querySelectorAll('[data-rv-item-row], .flex'); // both pre-rendered + added rows
+    const items = [];
+    itemsContainer.querySelectorAll('[data-rv-item-name]').forEach((nameEl, i) => {
+      const qtyEl = itemsContainer.querySelectorAll('[data-rv-item-qty]')[i];
+      const name = (nameEl.value || '').trim();
+      const qty = parseInt(qtyEl?.value || '1', 10) || 1;
+      if (name) items.push({ name, quantity: qty });
+    });
+    if (items.length) overrides.line_items = items;
+  }
+
+  const notes = (document.getElementById('rv-notes')?.value || '').trim();
+
+  const body = { resolution: 'approved' };
+  if (Object.keys(overrides).length) body.overrides = overrides;
+  if (notes) body.notes = notes;
+
+  const { data } = await api('POST', `/caretaker/evaluations/${evaluationId}/resolve`, body);
+  if (data?.success) {
+    toast('Approved — pipeline resuming with your edits', 'success');
+    closeReviewModal();
+    setTimeout(() => renderCaretaker(), 800);
+  } else {
+    toast(data?.error?.message || 'Failed to approve', 'error');
+  }
+}
 
 async function renderCustomers() {
   const { data } = await api('GET', '/customers');
