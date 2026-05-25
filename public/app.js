@@ -92,6 +92,84 @@ document.addEventListener('DOMContentLoaded', _installResponsiveTableObserver);
 // In case the script runs after DOMContentLoaded (defer/async):
 if (document.readyState !== 'loading') _installResponsiveTableObserver();
 
+/* ============================================================
+   Mobile accordions and list/detail flow.
+   ============================================================ */
+
+// Click handler for [data-mobile-accordion] cards. Toggles `.expanded`.
+// Wired once globally so dynamically-rendered cards inherit it.
+document.addEventListener('click', (ev) => {
+  if (window.innerWidth >= 768) return;
+  const card = ev.target.closest('[data-mobile-accordion]');
+  if (!card) return;
+  const trigger = card.querySelector(':scope > h3');
+  // Only toggle when the click landed on the heading (or its pseudo arrow).
+  // Clicking inputs / buttons inside the card while expanded must NOT collapse.
+  if (!trigger || !trigger.contains(ev.target)) return;
+  card.classList.toggle('expanded');
+});
+
+/**
+ * Open the detail pane on mobile.
+ * - panelId: the id of the detail pane element (e.g. 'customer-detail-panel')
+ * Adds body.detail-open which hides every other top-level grid child via CSS,
+ * and reveals the back button. No-op on desktop.
+ */
+function openMobileDetail(panelId) {
+  if (window.innerWidth >= 768) return;
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  // Tag this panel so the CSS rule keeps it visible while siblings hide.
+  panel.setAttribute('data-mobile-detail', '1');
+  document.body.classList.add('detail-open');
+  // Scroll detail pane into view (handles cases where the user was deep-scrolled in the list).
+  setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
+
+function closeMobileDetail() {
+  document.body.classList.remove('detail-open');
+}
+
+/**
+ * Auto-tag Settings cards (and any other section explicitly marked) as
+ * accordions on mobile. Runs whenever #tab-content changes.
+ */
+function _decorateMobileEnhancements(root) {
+  // Settings tab: every direct child card with a leading <h3> becomes an accordion.
+  // We detect via a sentinel attribute or by being in the Settings tab's grid.
+  // Easiest signal: the container holding those cards has class chain
+  // `grid grid-cols-1 md:grid-cols-2 gap-6` and immediate-child <div class="bg-white rounded-3xl ...">
+  // Instead of guessing, the Settings renderer can opt-in by tagging the wrapper
+  // — but for backwards compatibility we also do best-effort detection via
+  // a stable Settings marker: the presence of #set-shop-store input.
+  if (root.querySelector('#set-shop-store')) {
+    root.querySelectorAll('.bg-white.rounded-3xl.shadow-card').forEach((card, idx) => {
+      if (card.dataset.mobileAccordion) return;
+      // Only cards with a leading <h3> are real sections.
+      const firstHeading = card.querySelector(':scope > h3');
+      if (!firstHeading) return;
+      card.setAttribute('data-mobile-accordion', '1');
+      // First card defaults to expanded so users land on something useful.
+      if (idx === 0) card.classList.add('expanded');
+    });
+  }
+}
+
+function _installMobileEnhancementsObserver() {
+  const root = document.getElementById('tab-content');
+  if (!root) { setTimeout(_installMobileEnhancementsObserver, 250); return; }
+  // Whenever tab content swaps, re-decorate and reset detail-pane state so
+  // the mobile back button never appears stuck after a tab change.
+  const tick = () => {
+    document.body.classList.remove('detail-open');
+    _decorateMobileEnhancements(root);
+  };
+  tick();
+  new MutationObserver(tick).observe(root, { childList: true });
+}
+document.addEventListener('DOMContentLoaded', _installMobileEnhancementsObserver);
+if (document.readyState !== 'loading') _installMobileEnhancementsObserver();
+
 function showPage(page) {
   document.getElementById('auth-container').classList.remove('hidden');
   document.getElementById('app-layout').classList.add('hidden');
@@ -649,7 +727,7 @@ async function showJobDetail(index) {
   html += `</div>`;
 
   const panel = document.getElementById('job-detail-panel');
-  if (panel) panel.innerHTML = html;
+  if (panel) { panel.innerHTML = html; openMobileDetail('job-detail-panel'); }
 }
 
 async function reprocessJob(jobId) {
@@ -783,6 +861,7 @@ async function showFulfillmentDetail(i) {
   }
   html += `</div>`;
   document.getElementById('fulfillment-detail-panel').innerHTML = html;
+  openMobileDetail('fulfillment-detail-panel');
 }
 async function pollFulfillment(jobId, index) { await api('POST', '/fulfillment/poll/' + jobId); toast('Polling...','info'); setTimeout(() => showFulfillmentDetail(index), 2000); }
 
@@ -1139,7 +1218,7 @@ async function showCustomerDetail(customerId) {
   html += `</div>`;
 
   const panel = document.getElementById('customer-detail-panel');
-  if (panel) panel.innerHTML = html;
+  if (panel) { panel.innerHTML = html; openMobileDetail('customer-detail-panel'); }
 }
 
 async function renderHealth() {
@@ -1452,6 +1531,7 @@ async function openConv(id) {
   });
   html += `</div></div>`;
   document.getElementById('conv-detail-panel').innerHTML = html;
+  openMobileDetail('conv-detail-panel');
 }
 
 async function msgFeedback(msgId, feedback) {
@@ -2311,11 +2391,14 @@ async function renderPacking() {
   if (_packingSearch) html += `<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>`;
   html += `</div>`;
 
-  // Order cards grid
+  // Order cards grid (or horizontal swipe carousel on mobile via .h-snap)
   if (orders.length === 0) {
     html += `<div class="bg-white rounded-3xl shadow-card p-6">${emptyState('Nothing to pack', _packingFilter === 'awaiting_packing' ? 'All orders are packed and dropped off. Great job!' : 'No orders match the current filter.')}</div>`;
   } else {
-    html += `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">`;
+    // On mobile (.h-snap rule applies <768px), cards become horizontally
+    // scrollable with snap-points so packers can flick through the queue
+    // one full card at a time. On desktop the grid utility takes over.
+    html += `<div class="h-snap md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4">`;
     orders.forEach(o => html += renderPackingCard(o));
     html += `</div>`;
   }

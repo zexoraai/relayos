@@ -142,9 +142,12 @@
 
       /* Cards full-bleed look on mobile */
       .max-w-7xl { padding-left: 0 !important; padding-right: 0 !important; }
-      .grid.grid-cols-2, .grid.grid-cols-3, .grid.grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
-      .lg\\:grid-cols-3, .lg\\:grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
-      .md\\:grid-cols-2, .md\\:grid-cols-3, .md\\:grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
+      /* Stat-tile rows (typically 3- or 4-up) become 2-up on phones.
+         We deliberately do NOT override md:/lg: grid utilities here — those
+         already cascade off below md and are responsible for content layouts
+         (Settings 2-col, Customers 3-col list+detail, etc.) which need to
+         stack to a single column on mobile, not stay 2-up. */
+      .grid.grid-cols-3, .grid.grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
       h1.text-2xl, h1.text-3xl { font-size: 1.25rem !important; }
 
       /* Tap targets */
@@ -153,6 +156,74 @@
       /* Scrollable horizontal regions get snap behaviour for nicer swipe */
       .h-snap { display: flex; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; padding-bottom: 0.5rem; }
       .h-snap > * { scroll-snap-align: start; flex: 0 0 85%; }
+
+      /* ---- Mobile accordions (opt-in via data-mobile-accordion) ----
+         Renderer tags a card with `data-mobile-accordion`, the first <h3>
+         becomes the trigger and the rest of the card collapses on mobile.
+         All hidden by default; tapping the trigger toggles `.expanded`.
+         Desktop ignores the attribute completely. */
+      [data-mobile-accordion] > h3 {
+        cursor: pointer;
+        position: relative;
+        padding-right: 2rem;
+        margin-bottom: 0 !important;
+      }
+      [data-mobile-accordion] > h3::after {
+        content: '';
+        position: absolute;
+        right: 0.25rem;
+        top: 50%;
+        transform: translateY(-50%) rotate(0deg);
+        width: 0.6rem; height: 0.6rem;
+        border-right: 2px solid #9ca3af;
+        border-bottom: 2px solid #9ca3af;
+        transform-origin: center;
+        transform: translateY(-75%) rotate(45deg);
+        transition: transform 0.2s ease;
+      }
+      [data-mobile-accordion].expanded > h3::after {
+        transform: translateY(-25%) rotate(-135deg);
+      }
+      [data-mobile-accordion] > *:not(h3) {
+        display: none;
+      }
+      [data-mobile-accordion].expanded > *:not(h3) {
+        display: block;
+      }
+      /* Honor original layout helpers (flex, grid) when expanded */
+      [data-mobile-accordion].expanded > .flex { display: flex; }
+      [data-mobile-accordion].expanded > .grid { display: grid; }
+
+      /* ---- Two-pane list/detail mobile flow ----
+         Tabs that render a list + detail side-by-side on desktop (Customers,
+         Inbox, Pipeline, Fulfillment, Caretaker) want a single-pane mobile
+         experience. The detail panel container picks up `[data-mobile-detail]`
+         from the renderer (or the back button gets wired by JS). When body
+         has `.detail-open`, the list pane is hidden and the detail pane
+         takes the full viewport with a floating back button. */
+      body.detail-open #tab-content > .grid > div:not([data-mobile-detail]):not([data-mobile-detail-back]) {
+        display: none;
+      }
+      body.detail-open #mobile-detail-back {
+        display: flex !important;
+      }
+      #mobile-detail-back {
+        display: none;
+        position: fixed;
+        top: 0.6rem;
+        left: 0.6rem;
+        z-index: 50;
+        align-items: center;
+        gap: 0.4rem;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 9999px;
+        padding: 0.5rem 0.9rem 0.5rem 0.6rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #374151;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      }
     }
 
     /* Desktop hides the mobile topbar */
@@ -364,6 +435,12 @@
 
   <!-- Modal -->
   <div id="modal-root"></div>
+
+  <!-- Mobile detail-pane back button (visible only when body.detail-open + mobile media query) -->
+  <button id="mobile-detail-back" type="button" onclick="closeMobileDetail()" aria-label="Back to list">
+    <i data-lucide="arrow-left" class="w-4 h-4"></i>
+    <span>Back</span>
+  </button>
 
   <!-- Toast -->
   <div id="toast-container" class="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2"></div>
