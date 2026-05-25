@@ -1,4 +1,5 @@
 import { Job } from 'bullmq';
+import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/connection';
 import { createChildLogger } from '../observability/logger';
 import { PipelineStage, PipelineStatus } from './types';
@@ -13,6 +14,7 @@ import { executeLockersResolved } from './stages/lockersResolved';
 import { executePayloadCreated } from './stages/payloadCreated';
 import { executeCaretakerReview } from './stages/caretakerReview';
 import { executeCourierSubmitted } from './stages/courierSubmitted';
+import { CustomerData } from './stages/customerData';
 
 const log = createChildLogger({ module: 'pipeline' });
 
@@ -21,6 +23,67 @@ export interface PipelineJobData {
   tenantId: string;
   mailboxId: string;
   correlationId: string;
+}
+
+/**
+ * Divert an order into the manual-upload (or collection) queue and stop the
+ * pipeline. Used when the order can't be auto-submitted to PUDO — e.g.
+ * upload_type explicitly 'manual', collection method is 'collection', or no
+ * eligible TCG locker is in range for a *-to-locker delivery method.
+ *
+ * Idempotent on `orders` (won't duplicate when reprocessing).
+ */
+async function divertToManualQueue(args: {
+  jobId: string;
+  tenantId: string;
+  emailId: string;
+  customerData: CustomerData;
+  routingStatus: 'manual_upload' | 'collection';
+  reason: string;
+}): Promise<void> {
+  const { jobId, tenantId, emailId, customerData, routingStatus, reason } = args;
+  const db = getDb();
+
+  const existingOrder = await db('orders')
+    .where({ tenant_id: tenantId, order_number: customerData.OrderNumber })
+    .first();
+
+  if (!existingOrder) {
+    await db('orders').insert({
+      id: uuidv4(),
+      tenant_id: tenantId,
+      email_id: emailId,
+      pipeline_job_id: jobId,
+      order_number: customerData.OrderNumber,
+      customer_name: customerData.customerName,
+      customer_phone: customerData.customerPhone,
+      delivery_method: customerData.deliverMethod,
+      delivery_address: JSON.stringify(customerData.delivery_address),
+      line_items: JSON.stringify(customerData.line_items),
+      raw_shipping_address: customerData.delivery_address.entered_address,
+      upload_type: customerData.upload_type,
+      collection_method: customerData.collectionMethod,
+      routing_status: routingStatus,
+      manual_upload_reason: reason,
+      status: routingStatus === 'collection' ? 'awaiting_collection' : 'awaiting_manual_upload',
+    });
+  } else if (existingOrder.routing_status !== routingStatus) {
+    // Reprocess of a previously-automatic order that is now ineligible —
+    // flip it into the manual queue and tell the operator why.
+    await db('orders').where({ id: existingOrder.id }).update({
+      routing_status: routingStatus,
+      manual_upload_reason: reason,
+      status: routingStatus === 'collection' ? 'awaiting_collection' : 'awaiting_manual_upload',
+      updated_at: new Date(),
+    });
+  }
+
+  await db('pipeline_jobs').where({ id: jobId }).update({
+    status: PipelineStatus.COMPLETED,
+    current_stage: PipelineStage.CUSTOMER_DATA,
+    last_error: reason,
+    updated_at: new Date(),
+  });
 }
 
 /**
@@ -80,41 +143,12 @@ export async function processPipelineJob(data: PipelineJobData): Promise<void> {
 
     // Route: if upload_type is 'manual' or collection_method is 'collection', create a partial order and stop
     if (customerData.upload_type === 'manual' || customerData.collectionMethod === 'collection') {
-      const db = await import('../db/connection').then(m => m.getDb());
-      const { v4: uuidv4 } = await import('uuid');
       const routingStatus = customerData.collectionMethod === 'collection' ? 'collection' : 'manual_upload';
       const reason = customerData.collectionMethod === 'collection'
         ? 'Collection order — customer picks up'
         : 'Routed to manual upload (ineligible for automatic submission)';
 
-      // Create the order record so it appears in the manual/collection queue
-      const existingOrder = await db('orders').where({ tenant_id: tenantId, order_number: customerData.OrderNumber }).first();
-      if (!existingOrder) {
-        await db('orders').insert({
-          id: uuidv4(),
-          tenant_id: tenantId,
-          email_id: emailId,
-          pipeline_job_id: jobId,
-          order_number: customerData.OrderNumber,
-          customer_name: customerData.customerName,
-          customer_phone: customerData.customerPhone,
-          delivery_method: customerData.deliverMethod,
-          delivery_address: JSON.stringify(customerData.delivery_address),
-          line_items: JSON.stringify(customerData.line_items),
-          raw_shipping_address: customerData.delivery_address.entered_address,
-          upload_type: customerData.upload_type,
-          collection_method: customerData.collectionMethod,
-          routing_status: routingStatus,
-          manual_upload_reason: reason,
-          status: routingStatus === 'collection' ? 'awaiting_collection' : 'awaiting_manual_upload',
-        });
-      }
-
-      await db('pipeline_jobs').where({ id: jobId }).update({
-        status: PipelineStatus.COMPLETED,
-        current_stage: PipelineStage.CUSTOMER_DATA,
-        updated_at: new Date(),
-      });
+      await divertToManualQueue({ jobId, tenantId, emailId, customerData, routingStatus, reason });
       childLog.info({ orderNumber: customerData.OrderNumber, routingStatus }, 'Pipeline completed (routed to ' + routingStatus + ')');
       return;
     }
@@ -122,6 +156,20 @@ export async function processPipelineJob(data: PipelineJobData): Promise<void> {
     // Stage 8: LOCKERS_RESOLVED (find nearest PUDO locker)
     childLog.info('Pipeline stage: LOCKERS_RESOLVED');
     const lockerResult = await executeLockersResolved(jobId, tenantId, location);
+
+    // Route: *-to-locker orders that have no eligible TCG locker within range
+    // can't be auto-submitted to PUDO. Send them to the manual upload queue
+    // so an operator can ship them another way (e.g. via the kiosk, in-person
+    // drop, or contact the customer to switch to a door delivery).
+    const needsDestinationLocker = (customerData.deliverMethod || '').endsWith('-to-locker');
+    if (needsDestinationLocker && (!lockerResult || lockerResult.terminal_id === 'NO_LOCKER_FOUND' || !lockerResult.eligibility)) {
+      const reason = `No eligible PUDO locker within range for ${customerData.deliverMethod}. ` +
+        `Customer address: ${customerData.delivery_address.entered_address || customerData.delivery_address.suburb || 'unknown'}. ` +
+        `Closest distance: ${lockerResult?.distance_km || 'n/a'} km.`;
+      await divertToManualQueue({ jobId, tenantId, emailId, customerData, routingStatus: 'manual_upload', reason });
+      childLog.warn({ orderNumber: customerData.OrderNumber, reason }, 'Pipeline diverted to manual upload (no eligible locker)');
+      return;
+    }
 
     // Stage 9: PAYLOAD_CREATED (fork: locker-to-door vs locker-to-locker)
     childLog.info({ deliverMethod: customerData.deliverMethod }, 'Pipeline stage: PAYLOAD_CREATED');

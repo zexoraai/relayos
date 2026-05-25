@@ -115,7 +115,13 @@ export async function executeLockersResolved(
     }
   }
 
-  // 20km rule: prefer eligible if within threshold, otherwise fall back to closest
+  // Eligible-only: if no Locker (type === 'Locker') is within THRESHOLD_KM,
+  // the order is genuinely undeliverable to a locker. We MUST NOT fall back
+  // to "closest of any kind" because the closest TCG terminal in rural areas
+  // is often a Kiosk or partner counter, and PUDO rejects locker-to-locker
+  // payloads with non-Locker terminals (422 "Address types did not matched
+  // selected service"). The pipeline divert step (pipeline/index.ts) will
+  // route these orders to the manual upload queue with a clear reason.
   let chosenLocker: any = null;
   let chosenDistance = Infinity;
   let eligibilityUsed = false;
@@ -124,11 +130,9 @@ export async function executeLockersResolved(
     chosenLocker = closestEligible;
     chosenDistance = minDistEligible;
     eligibilityUsed = true;
-  } else if (closestAny) {
-    chosenLocker = closestAny;
-    chosenDistance = minDistAny;
-    eligibilityUsed = false;
   }
+  // No `else if (closestAny)` — see comment above. Diverting to manual is
+  // safer than handing a non-locker to PUDO with the wrong service code.
 
   let result: LockersResolvedResult;
 
