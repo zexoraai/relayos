@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { createChildLogger } from '../observability/logger';
 
@@ -11,7 +11,7 @@ router.use(authMiddleware);
 /**
  * GET /agent-runs - list recent runs with optional agent filter
  */
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requirePermission('agents.runs.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { agent, status, limit = '50' } = req.query;
@@ -33,7 +33,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * GET /agent-runs/:id - full replay detail (messages, response, tool calls)
  */
-router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:id', requirePermission('agents.runs.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -50,7 +50,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /agent-runs/:id/approve - mark a run as approved (output was correct)
  */
-router.post('/:id/approve', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:id/approve', requirePermission('agents.runs.replay'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -67,7 +67,7 @@ router.post('/:id/approve', async (req: AuthenticatedRequest, res: Response) => 
  * POST /agent-runs/:id/correct - submit a correction for a run.
  * This creates a few-shot example that will be injected into future calls.
  */
-router.post('/:id/correct', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:id/correct', requirePermission('agents.runs.correct'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -124,7 +124,7 @@ router.post('/:id/correct', async (req: AuthenticatedRequest, res: Response) => 
 /**
  * GET /agent-runs/corrections - list all active corrections for the tenant
  */
-router.get('/corrections/list', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/corrections/list', requirePermission('agents.runs.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { agent } = req.query;
@@ -142,7 +142,7 @@ router.get('/corrections/list', async (req: AuthenticatedRequest, res: Response)
 /**
  * DELETE /agent-runs/corrections/:id - deactivate a correction
  */
-router.delete('/corrections/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/corrections/:id', requirePermission('agents.runs.correct'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };

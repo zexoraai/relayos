@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { saveSettings, dispatchByPurpose, WhatsAppPhoneClaimedError } from '../whatsapp';
 import { encrypt, decrypt } from '../crypto';
@@ -14,7 +14,7 @@ router.use(authMiddleware);
 /**
  * GET /whatsapp/settings - returns whether WhatsApp is configured (no token).
  */
-router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/settings', requirePermission('whatsapp.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -38,7 +38,7 @@ router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /whatsapp/settings - upsert credentials.
  */
-router.post('/settings', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/settings', requirePermission('whatsapp.settings.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const {
     phone_number_id,
@@ -84,7 +84,7 @@ router.post('/settings', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * DELETE /whatsapp/settings
  */
-router.delete('/settings', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/settings', requirePermission('whatsapp.settings.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   await db('whatsapp_settings').where({ tenant_id: tenantId }).delete();
@@ -94,7 +94,7 @@ router.delete('/settings', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * GET /whatsapp/templates
  */
-router.get('/templates', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/templates', requirePermission('whatsapp.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const rows = await db('whatsapp_templates').where({ tenant_id: tenantId }).orderBy('purpose');
@@ -104,7 +104,7 @@ router.get('/templates', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * PUT /whatsapp/templates/:purpose - update a template body / variables / enabled flag.
  */
-router.put('/templates/:purpose', async (req: AuthenticatedRequest, res: Response) => {
+router.put('/templates/:purpose', requirePermission('whatsapp.templates.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { purpose } = req.params;
@@ -143,7 +143,7 @@ router.put('/templates/:purpose', async (req: AuthenticatedRequest, res: Respons
 /**
  * POST /whatsapp/templates - create a new template (saved as DRAFT, not yet submitted to Meta)
  */
-router.post('/templates', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/templates', requirePermission('whatsapp.templates.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const {
@@ -191,13 +191,13 @@ router.post('/templates', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * GET /whatsapp/event-types - list all available domain events that templates can subscribe to.
  */
-router.get('/event-types', async (_req: AuthenticatedRequest, res: Response) => {
+router.get('/event-types', requirePermission('whatsapp.view'), async (_req: AuthenticatedRequest, res: Response) => {
   const { DomainEventType } = await import('../events');
   const events = Object.values(DomainEventType);
   return res.status(200).json({ success: true, data: events });
 });
 
-router.delete('/templates/:purpose', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/templates/:purpose', requirePermission('whatsapp.templates.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { purpose } = req.params;
@@ -208,7 +208,7 @@ router.delete('/templates/:purpose', async (req: AuthenticatedRequest, res: Resp
 
 // ---------- Meta Business credentials ----------
 
-router.get('/business-settings', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/business-settings', requirePermission('whatsapp.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const row = await db('whatsapp_business_settings').where({ tenant_id: tenantId }).first();
@@ -216,7 +216,7 @@ router.get('/business-settings', async (req: AuthenticatedRequest, res: Response
   return res.status(200).json({ success: true, data: { configured: true, business_account_id: row.business_account_id, updated_at: row.updated_at } });
 });
 
-router.post('/business-settings', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/business-settings', requirePermission('whatsapp.settings.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { business_account_id, system_user_token } = req.body;
@@ -244,7 +244,7 @@ router.post('/business-settings', async (req: AuthenticatedRequest, res: Respons
  * POST /whatsapp/templates/:purpose/submit-to-meta
  * Submits the local template to Meta for approval.
  */
-router.post('/templates/:purpose/submit-to-meta', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/templates/:purpose/submit-to-meta', requirePermission('whatsapp.templates.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { purpose } = req.params as { purpose: string };
@@ -304,7 +304,7 @@ router.post('/templates/:purpose/submit-to-meta', async (req: AuthenticatedReque
  * POST /whatsapp/templates/:purpose/sync-from-meta
  * Refresh the template's status from Meta.
  */
-router.post('/templates/:purpose/sync-from-meta', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/templates/:purpose/sync-from-meta', requirePermission('whatsapp.templates.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { purpose } = req.params;
@@ -341,7 +341,7 @@ router.post('/templates/:purpose/sync-from-meta', async (req: AuthenticatedReque
 /**
  * GET /whatsapp/messages - recent message log.
  */
-router.get('/messages', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/messages', requirePermission('whatsapp.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { limit = '100' } = req.query;
@@ -357,7 +357,7 @@ router.get('/messages', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /whatsapp/test - send a test message to a recipient.
  */
-router.post('/test', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/test', requirePermission('whatsapp.send.test'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const { to, purpose = 'order_confirmed', variables = {} } = req.body;
 

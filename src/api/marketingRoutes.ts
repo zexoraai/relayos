@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { createChildLogger } from '../observability/logger';
 
@@ -10,7 +10,7 @@ router.use(authMiddleware);
 
 // ---- Campaigns CRUD ----
 
-router.get('/campaigns', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/campaigns', requirePermission('marketing.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const campaigns = await db('marketing_campaigns')
@@ -28,7 +28,7 @@ router.get('/campaigns', async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json({ success: true, data: campaigns });
 });
 
-router.post('/campaigns', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/campaigns', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { name, campaign_type, description, inactivity_days_trigger, abandon_hours_trigger, max_sends_per_customer, cooldown_days, steps } = req.body;
@@ -72,7 +72,7 @@ router.post('/campaigns', async (req: AuthenticatedRequest, res: Response) => {
   return res.status(201).json({ success: true, data: campaign });
 });
 
-router.put('/campaigns/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.put('/campaigns/:id', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -92,7 +92,7 @@ router.put('/campaigns/:id', async (req: AuthenticatedRequest, res: Response) =>
   return res.status(200).json({ success: true, data: { message: 'Campaign updated' } });
 });
 
-router.delete('/campaigns/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/campaigns/:id', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -102,7 +102,7 @@ router.delete('/campaigns/:id', async (req: AuthenticatedRequest, res: Response)
 
 // ---- Steps CRUD ----
 
-router.post('/campaigns/:id/steps', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/campaigns/:id/steps', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -127,7 +127,7 @@ router.post('/campaigns/:id/steps', async (req: AuthenticatedRequest, res: Respo
   return res.status(201).json({ success: true, data: step });
 });
 
-router.put('/campaigns/:campaignId/steps/:stepId', async (req: AuthenticatedRequest, res: Response) => {
+router.put('/campaigns/:campaignId/steps/:stepId', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const { campaignId, stepId } = req.params as { campaignId: string; stepId: string };
   const { delay_days, delay_hours, whatsapp_template_purpose, message_body, enabled } = req.body;
@@ -143,7 +143,7 @@ router.put('/campaigns/:campaignId/steps/:stepId', async (req: AuthenticatedRequ
   return res.status(200).json({ success: true, data: { message: 'Step updated' } });
 });
 
-router.delete('/campaigns/:campaignId/steps/:stepId', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/campaigns/:campaignId/steps/:stepId', requirePermission('marketing.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const { campaignId, stepId } = req.params as { campaignId: string; stepId: string };
   await db('marketing_campaign_steps').where({ id: stepId, campaign_id: campaignId }).delete();
@@ -152,7 +152,7 @@ router.delete('/campaigns/:campaignId/steps/:stepId', async (req: AuthenticatedR
 
 // ---- Stats ----
 
-router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/stats', requirePermission('marketing.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 

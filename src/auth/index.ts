@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { getDb } from '../db/connection';
 import { createChildLogger } from '../observability/logger';
+import { ROLE_PRESETS } from './permissions';
 
 const log = createChildLogger({ module: 'auth' });
 
@@ -129,10 +130,36 @@ export async function loginTenant(email: string, password: string): Promise<{ to
     throw new AuthError('INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
-  // Backfill: create a tenant_users row + super admin permission for legacy tenants
+  // Bounded backfill for legacy tenants. The old code path inserted permission
+  // '*' for any tenant that hit the fallback, silently making every legacy
+  // tenant a super admin. The new policy:
+  //
+  //   1. Zero `tenant_users` rows AND `tenants.email` matches the login email
+  //      → mint exactly one `tenant_users` row with permissions equal to
+  //        `ROLE_PRESETS.super_admin` (still ['*']). This preserves the
+  //        original tenant owner's super-admin access.
+  //
+  //   2. One or more `tenant_users` rows exist but none of them has an
+  //      email equal to `tenants.email`
+  //      → do NOT auto-promote. Insert a `tenant_onboarding_events` row of
+  //        type `rbac_review_required` describing the candidate users and
+  //        reject the login with `RBAC_REVIEW_REQUIRED` so an operator can
+  //        resolve who keeps super admin via the existing
+  //        `PUT /users/:id/permissions` flow.
+  //
+  // The "tenant_users row whose email matches tenants.email" path is handled
+  // by the multi-user code path above (we wouldn't reach this fallback in
+  // that case), so this branch only fires for legacy / ambiguous tenants.
+  const existingUsers = await db('tenant_users')
+    .where({ tenant_id: tenant.id })
+    .select('id', 'email');
+
   let userId: string;
   let permissions: string[];
-  try {
+
+  if (existingUsers.length === 0 && tenant.email === normalizedEmail) {
+    // Bounded backfill: original tenant owner, no users yet.
+    const superAdminPerms = ROLE_PRESETS.super_admin;
     const [createdUser] = await db('tenant_users').insert({
       tenant_id: tenant.id,
       email: tenant.email,
@@ -141,14 +168,35 @@ export async function loginTenant(email: string, password: string): Promise<{ to
       status: 'active',
     }).returning('id');
     userId = createdUser.id;
-    await db('user_permissions').insert({ user_id: userId, permission: '*' });
-    permissions = ['*'];
-  } catch {
-    // Already backfilled (race or migration), look it up
-    const u = await db('tenant_users').where({ tenant_id: tenant.id, email: tenant.email }).first();
-    userId = u?.id;
-    const permRows = userId ? await db('user_permissions').where({ user_id: userId }).select('permission') : [];
-    permissions = permRows.map((r: any) => r.permission);
+    await db('user_permissions').insert(
+      superAdminPerms.map((permission) => ({ user_id: userId, permission })),
+    );
+    permissions = [...superAdminPerms];
+  } else {
+    // Ambiguous: legacy tenants row authenticates but the existing
+    // `tenant_users` rows do not include one whose email matches
+    // `tenants.email`. Refuse to pick a super admin automatically; emit a
+    // review event so operators can resolve, and reject the login.
+    await db('tenant_onboarding_events').insert({
+      tenant_id: tenant.id,
+      event_type: 'rbac_review_required',
+      event_payload: JSON.stringify({
+        tenant_id: tenant.id,
+        candidate_user_ids: existingUsers.map((u: any) => u.id),
+        tenant_email: tenant.email,
+        reason: 'ambiguous_legacy_super_admin',
+      }),
+    });
+
+    log.warn(
+      { tenantId: tenant.id, candidateUserIds: existingUsers.map((u: any) => u.id) },
+      'Ambiguous legacy super-admin on login; rbac_review_required event emitted',
+    );
+
+    throw new AuthError(
+      'RBAC_REVIEW_REQUIRED',
+      'This tenant requires an RBAC review before login can proceed. An operator must resolve who holds super-admin access.',
+    );
   }
 
   const token = generateToken({

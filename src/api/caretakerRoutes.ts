@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { validateBody } from './validate';
 import { caretakerRulesBodySchema } from '../schemas/settings';
 import { getDb } from '../db/connection';
@@ -15,7 +15,7 @@ router.use(authMiddleware);
 /**
  * GET /caretaker/rules
  */
-router.get('/rules', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/rules', requirePermission('caretaker.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -32,7 +32,7 @@ router.get('/rules', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /caretaker/rules - upsert per-tenant rule config.
  */
-router.post('/rules', validateBody(caretakerRulesBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/rules', requirePermission('caretaker.rules.manage'), validateBody(caretakerRulesBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const data: any = { tenant_id: tenantId, ...req.body };
@@ -51,7 +51,7 @@ router.post('/rules', validateBody(caretakerRulesBodySchema), async (req: Authen
 /**
  * GET /caretaker/evaluations - list pending reviews + recent decisions.
  */
-router.get('/evaluations', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/evaluations', requirePermission('caretaker.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { verdict, limit = '50' } = req.query;
@@ -80,7 +80,7 @@ router.get('/evaluations', async (req: AuthenticatedRequest, res: Response) => {
  * (so the dashboard can pre-fill the edit form), and any prior reviewer
  * overrides. Used by the override-and-approve UI.
  */
-router.get('/evaluations/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/evaluations/:id', requirePermission('caretaker.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -131,7 +131,7 @@ router.get('/evaluations/:id', async (req: AuthenticatedRequest, res: Response) 
  * On approve, the pipeline is re-enqueued; the next pass merges `overrides`
  * over the AI-extracted data via executeCustomerData.
  */
-router.post('/evaluations/:id/resolve', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/evaluations/:id/resolve', requirePermission('caretaker.review.approve', 'caretaker.review.reject'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const userEmail = req.tenant!.email || 'unknown';
   const { id } = req.params as { id: string };
@@ -202,7 +202,7 @@ router.post('/evaluations/:id/resolve', async (req: AuthenticatedRequest, res: R
  * Sets the evaluation's verdict back to 'review' and clears resolution.
  * Flips the pipeline_job back to pending_review.
  */
-router.post('/evaluations/:id/reopen', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/evaluations/:id/reopen', requirePermission('caretaker.review.approve'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const userEmail = req.tenant!.email || 'unknown';
   const { id } = req.params as { id: string };

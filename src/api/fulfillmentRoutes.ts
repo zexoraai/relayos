@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { ensureFulfillmentJob, processFulfillmentJob } from '../fulfillment';
 import { cancelPudoShipment } from '../fulfillment/pudoCancel';
@@ -12,7 +12,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // GET /fulfillment/jobs - List fulfillment jobs for the tenant
-router.get('/jobs', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/jobs', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -34,7 +34,7 @@ router.get('/jobs', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /fulfillment/jobs/:id - Get fulfillment job detail with stage results and events
-router.get('/jobs/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/jobs/:id', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id as string;
@@ -67,7 +67,7 @@ router.get('/jobs/:id', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /fulfillment/stats
-router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/stats', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -101,7 +101,7 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // POST /fulfillment/poll/:id - Manually trigger a poll
-router.post('/poll/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/poll/:id', requirePermission('fulfillment.poll'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id as string;
@@ -142,7 +142,7 @@ router.post('/poll/:id', async (req: AuthenticatedRequest, res: Response) => {
  * fails but PUDO succeeds) is reported with per-side status so you know
  * exactly what was rolled back where.
  */
-router.post('/jobs/:id/cancel', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/jobs/:id/cancel', requirePermission('fulfillment.cancel'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id as string;

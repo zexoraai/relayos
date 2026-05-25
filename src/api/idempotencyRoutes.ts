@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { clearIdempotencyKey } from '../idempotency';
 import { createChildLogger } from '../observability/logger';
@@ -13,7 +13,7 @@ router.use(authMiddleware);
  * GET /idempotency - list cached side-effect calls for the tenant.
  * Filterable by action_type and status.
  */
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requirePermission('idempotency.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { action_type, status, limit = '100' } = req.query;
@@ -30,7 +30,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
  * DELETE /idempotency/:key - forget a cached entry.
  * Used when upstream state has been reset and we WANT to allow re-submission.
  */
-router.delete('/:key', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:key', requirePermission('idempotency.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const { key } = req.params as { key: string };
   const decoded = decodeURIComponent(key);

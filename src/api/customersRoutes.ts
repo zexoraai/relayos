@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { getCustomerOrders, normalizePhone } from '../customers';
 
@@ -7,7 +7,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // GET /customers - List all customers for the tenant
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requirePermission('customers.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -37,7 +37,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /customers/:id - Get customer detail with order history
-router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:id', requirePermission('customers.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const customerId = req.params.id as string;
@@ -56,7 +56,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /customers/lookup/:phone - Lookup customer by phone number
-router.get('/lookup/:phone', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/lookup/:phone', requirePermission('customers.view'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const phone = req.params.phone as string;
   const result = await getCustomerOrders(tenantId, phone);

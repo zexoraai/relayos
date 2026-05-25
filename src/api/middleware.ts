@@ -42,17 +42,31 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
  * Checks that the authenticated user's permissions (loaded into JWT at login)
  * include the required permission (or a wildcard that covers it).
  *
- * Treats legacy tokens with no permissions array as super admin (backwards compat).
+ * Behavior:
+ *  - No `permissions` field on the token (legacy / pre-RBAC JWT) → 401 with
+ *    code TOKEN_EXPIRED_REAUTH_REQUIRED so the frontend can clear the token
+ *    and force re-login. The backfill on next login will mint a token with
+ *    the user's actual permissions.
+ *  - Empty `permissions: []`         → 403 FORBIDDEN
+ *  - Permissions present but missing → 403 FORBIDDEN with the required list
+ *  - Match (incl. '*' / 'module.*')  → next()
  */
 export function requirePermission(...required: string[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.tenant) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } });
     }
-    // Legacy token (no permissions field) → treat as super admin for backwards compat
     const permissions = req.tenant.permissions;
-    if (!permissions) {
-      return next();
+    // Legacy token (no permissions field) → force re-auth so a fresh token with
+    // the proper permissions array is issued.
+    if (permissions === undefined || permissions === null) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'TOKEN_EXPIRED_REAUTH_REQUIRED',
+          message: 'Your session predates the latest access-control update. Please log in again.',
+        },
+      });
     }
     const ok = required.length === 1
       ? hasPermission(permissions, required[0])

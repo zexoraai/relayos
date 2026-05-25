@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { validateBody } from './validate';
 import { shopifyApiBodySchema, collectionContactBodySchema } from '../schemas/settings';
 import { getDb } from '../db/connection';
@@ -12,7 +12,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // GET /settings/shopify-api - Get current Shopify API settings (without the token)
-router.get('/shopify-api', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/shopify-api', requirePermission('settings.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -36,7 +36,7 @@ router.get('/shopify-api', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // POST /settings/shopify-api - Upsert Shopify API credentials (any plan)
-router.post('/shopify-api', validateBody(shopifyApiBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/shopify-api', requirePermission('settings.shopify.manage'), validateBody(shopifyApiBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { shopify_store, shopify_access_token } = req.body;
@@ -81,7 +81,7 @@ router.post('/shopify-api', validateBody(shopifyApiBodySchema), async (req: Auth
 });
 
 // DELETE /settings/shopify-api - Remove Shopify API credentials
-router.delete('/shopify-api', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/shopify-api', requirePermission('settings.shopify.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -93,7 +93,7 @@ router.delete('/shopify-api', async (req: AuthenticatedRequest, res: Response) =
 });
 
 // GET /settings/imap - Get current IMAP settings (without the password)
-router.get('/imap', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/imap', requirePermission('settings.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -125,7 +125,7 @@ router.get('/imap', async (req: AuthenticatedRequest, res: Response) => {
 // POST /settings/imap - Upsert IMAP credentials post-onboarding.
 // Used by the dashboard's Settings page to fix or rotate IMAP credentials
 // without going back through onboarding.
-router.post('/imap', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/imap', requirePermission('settings.imap.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { imap_host, imap_port, imap_username, imap_password, imap_mailbox, imap_use_ssl, polling_interval, batch_size } = req.body;
@@ -195,7 +195,7 @@ router.post('/imap', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // DELETE /settings/imap - Remove IMAP credentials. Stops polling for this tenant.
-router.delete('/imap', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/imap', requirePermission('settings.imap.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -207,7 +207,7 @@ router.delete('/imap', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /settings/pudo - Get current PUDO settings (without secrets)
-router.get('/pudo', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/pudo', requirePermission('settings.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -230,7 +230,7 @@ router.get('/pudo', async (req: AuthenticatedRequest, res: Response) => {
 // POST /settings/pudo - Upsert PUDO credentials post-onboarding.
 // Used by the Settings page to fix or rotate PUDO creds (api key + login)
 // without going back through onboarding.
-router.post('/pudo', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/pudo', requirePermission('settings.pudo.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { pudo_username, pudo_password, pudo_api_key } = req.body;
@@ -289,7 +289,7 @@ router.post('/pudo', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // DELETE /settings/pudo - Remove PUDO credentials. Stops fulfillment for this tenant.
-router.delete('/pudo', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/pudo', requirePermission('settings.pudo.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -301,7 +301,7 @@ router.delete('/pudo', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // GET /settings/collection-contact
-router.get('/collection-contact', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/collection-contact', requirePermission('settings.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -326,7 +326,7 @@ router.get('/collection-contact', async (req: AuthenticatedRequest, res: Respons
 });
 
 // POST /settings/collection-contact
-router.post('/collection-contact', validateBody(collectionContactBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/collection-contact', requirePermission('settings.collection.manage'), validateBody(collectionContactBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { contact_name, contact_email, contact_phone, special_instructions, collection_terminal_id } = req.body;

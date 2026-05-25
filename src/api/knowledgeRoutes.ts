@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import multer from 'multer';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { validateBody } from './validate';
 import { ingestUrlBodySchema, ingestSitemapBodySchema, knowledgeDocBodySchema, knowledgeDocPatchSchema } from '../schemas/knowledge';
 import { getDb } from '../db/connection';
@@ -19,7 +19,7 @@ const upload = multer({
 
 // --- Sources ---
 
-router.get('/sources', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/sources', requirePermission('knowledge.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const sources = await db('tenant_knowledge_sources')
@@ -28,7 +28,7 @@ router.get('/sources', async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json({ success: true, data: sources });
 });
 
-router.post('/sources/url', validateBody(ingestUrlBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/url', requirePermission('knowledge.sources.manage'), validateBody(ingestUrlBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const { url, label, category } = req.body;
   try {
@@ -40,7 +40,7 @@ router.post('/sources/url', validateBody(ingestUrlBodySchema), async (req: Authe
   }
 });
 
-router.post('/sources/sitemap', validateBody(ingestSitemapBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/sitemap', requirePermission('knowledge.sources.manage'), validateBody(ingestSitemapBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const { sitemap_url, label, max_pages, path_prefix } = req.body;
   try {
@@ -51,7 +51,7 @@ router.post('/sources/sitemap', validateBody(ingestSitemapBodySchema), async (re
   }
 });
 
-router.post('/sources/upload', upload.single('file'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/upload', requirePermission('knowledge.sources.manage'), upload.single('file'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   if (!req.file) {
     return res.status(400).json({ success: false, error: { code: 'NO_FILE', message: 'Upload a file under field name "file"' } });
@@ -71,7 +71,7 @@ router.post('/sources/upload', upload.single('file'), async (req: AuthenticatedR
   }
 });
 
-router.post('/sources/shopify-products', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/shopify-products', requirePermission('knowledge.sources.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   try {
     const summary = await ingestShopifyProducts({ tenantId, maxProducts: req.body?.max_products });
@@ -81,7 +81,7 @@ router.post('/sources/shopify-products', async (req: AuthenticatedRequest, res: 
   }
 });
 
-router.post('/sources/:id/resync', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/sources/:id/resync', requirePermission('knowledge.sources.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
   try {
@@ -92,7 +92,7 @@ router.post('/sources/:id/resync', async (req: AuthenticatedRequest, res: Respon
   }
 });
 
-router.delete('/sources/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/sources/:id', requirePermission('knowledge.sources.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -102,7 +102,7 @@ router.delete('/sources/:id', async (req: AuthenticatedRequest, res: Response) =
 
 // --- Documents (existing) ---
 
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requirePermission('knowledge.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { source_id, limit = '200' } = req.query;
@@ -115,7 +115,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json({ success: true, data: docs });
 });
 
-router.post('/', validateBody(knowledgeDocBodySchema), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', requirePermission('knowledge.docs.manage'), validateBody(knowledgeDocBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { title, category, body, enabled = true } = req.body;
@@ -137,7 +137,7 @@ router.post('/', validateBody(knowledgeDocBodySchema), async (req: Authenticated
   return res.status(201).json({ success: true, data: row });
 });
 
-router.put('/:id', validateBody(knowledgeDocPatchSchema), async (req: AuthenticatedRequest, res: Response) => {
+router.put('/:id', requirePermission('knowledge.docs.manage'), validateBody(knowledgeDocPatchSchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -159,7 +159,7 @@ router.put('/:id', validateBody(knowledgeDocPatchSchema), async (req: Authentica
   return res.status(200).json({ success: true, data: updated[0] });
 });
 
-router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:id', requirePermission('knowledge.docs.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -169,7 +169,7 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
 // --- Conversations (chatbot inbox) ---
 
-router.get('/__conversations', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/__conversations', requirePermission('inbox.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const conversations = await db('chat_conversations')
@@ -179,7 +179,7 @@ router.get('/__conversations', async (req: AuthenticatedRequest, res: Response) 
   return res.status(200).json({ success: true, data: conversations });
 });
 
-router.get('/__conversations/:id/messages', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/__conversations/:id/messages', requirePermission('inbox.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { id } = req.params as { id: string };
@@ -196,7 +196,7 @@ router.get('/__conversations/:id/messages', async (req: AuthenticatedRequest, re
  * POST /knowledge/__conversations/:convId/messages/:msgId/feedback
  * Body: { feedback: 'up' | 'down', correction?: string }
  */
-router.post('/__conversations/:convId/messages/:msgId/feedback', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/__conversations/:convId/messages/:msgId/feedback', requirePermission('inbox.reply'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { convId, msgId } = req.params as { convId: string; msgId: string };
@@ -281,7 +281,7 @@ async function ensureManualSource(tenantId: string): Promise<any> {
  *   - "warming"  : sources>=1 but embeddings still catching up
  *   - "empty"    : no sources / no docs
  */
-router.get('/health', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/health', requirePermission('knowledge.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 

@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { decrypt } from '../crypto';
 import { createChildLogger } from '../observability/logger';
@@ -19,7 +19,7 @@ interface HealthCheckResult {
 }
 
 // POST /health/check - Run all health checks for the tenant
-router.post('/check', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/check', requirePermission('health.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 

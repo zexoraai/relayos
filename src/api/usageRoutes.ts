@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getUsageStats } from '../ai/usageTracker';
 import { getDb } from '../db/connection';
 
@@ -9,7 +9,7 @@ router.use(authMiddleware);
 /**
  * GET /usage/summary - aggregate stats for the tenant
  */
-router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/summary', requirePermission('agents.usage.view'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const db = getDb();
 
@@ -66,7 +66,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * GET /usage/recent - last N calls with full detail
  */
-router.get('/recent', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/recent', requirePermission('agents.usage.view'), async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.tenant!.tenantId;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const agent = req.query.agent as string || undefined;

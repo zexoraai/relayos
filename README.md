@@ -268,3 +268,71 @@ This filters out:
 - Rate limiting on auth endpoints (20 req/15min)
 - Tenant isolation enforced on all onboarding endpoints
 - Secrets never logged (pino redaction)
+
+## Deploying the RBAC enforcement audit
+
+The RBAC enforcement audit (see `.kiro/specs/rbac-enforcement-audit/`) closes the
+legacy-token bypass in `requirePermission` and adds per-endpoint permission
+enforcement across every authenticated router. To roll it out safely, every
+in-flight JWT issued before the deploy must be invalidated so the frontend
+forces a single re-login and the next token carries a real `permissions[]`
+claim.
+
+### Why rotate `JWT_SECRET`
+
+Two options were considered for invalidating in-flight tokens:
+
+- Bump a `ver` claim in the JWT payload — surgical, but adds a new field that
+  every verifier must understand and requires a coordinated migration.
+- Rotate `JWT_SECRET` — single env var change, no schema change. Every
+  existing JWT signature fails verification, the API returns `401
+  INVALID_TOKEN`, and the frontend's existing `INVALID_TOKEN` handler in
+  `public/app.js` clears `localStorage` and redirects to `/login`.
+
+We chose `JWT_SECRET` rotation. RelayOS is small enough that one forced
+re-login at deploy time is acceptable, and it requires no code path beyond
+the existing signature check.
+
+### Deploy step
+
+In the deploy environment (Railway, Docker, etc.), set `JWT_SECRET` to a new
+value before the new image starts serving traffic:
+
+```bash
+# Example: rotate to a fresh 32-byte hex string
+export JWT_SECRET=$(openssl rand -hex 32)
+```
+
+Do **not** keep the old secret around in any form (no `JWT_SECRET_OLD`, no
+secondary verifier). The intent is that every existing token fails signature
+verification on the next request.
+
+### Expected user-visible effect
+
+- One forced re-login. Every active session sees the next API call respond
+  with `401 INVALID_TOKEN` (signature failure from `authMiddleware` in
+  `src/api/middleware.ts`).
+- The frontend's `api()` helper in `public/app.js` clears `localStorage`
+  on `INVALID_TOKEN` and redirects to the login page.
+- After re-login, `/auth/login` mints a fresh JWT signed with the new secret
+  and carrying the user's `permissions[]` array. `/auth/me` then returns the
+  live `user_permissions` rows, which `switchTab` and the sidebar filter
+  consume to gate the dashboard.
+
+No data migration is required for token rotation. Tenants that need RBAC
+review surface as `tenant_onboarding_events` rows of type
+`rbac_review_required`; see `docs/rbac-review-runbook.md` for the resolution
+workflow.
+
+### Backout
+
+If the re-login burst exceeds capacity or any other regression surfaces, roll
+back by redeploying the previous image with the previous `JWT_SECRET` value
+restored in the environment. Tokens issued under the old secret will verify
+again and active sessions resume without further action.
+
+The new `requirePermission` behavior is safe to keep across rollback: it only
+rejects tokens that were already structurally broken (missing `permissions`
+claim). The `loginTenant` backfill change is similarly safe — it only narrows
+the auto-`*` promotion, never broadens it. Backout is therefore secret-only
+and does not require reverting the source change.

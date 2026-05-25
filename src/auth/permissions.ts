@@ -55,6 +55,10 @@ export const PERMISSIONS = {
     MANAGE: 'prompts.manage',
     EVAL_RUN: 'prompts.eval.run',
   },
+  MARKETING: {
+    VIEW: 'marketing.view',
+    MANAGE: 'marketing.manage',
+  },
   SETTINGS: {
     VIEW: 'settings.view',
     SHOPIFY_MANAGE: 'settings.shopify.manage',
@@ -144,6 +148,8 @@ export const ROLE_PRESETS: Record<string, string[]> = {
     'whatsapp.view',
     'whatsapp.templates.manage',
     'inbox.view',
+    'marketing.view',
+    'marketing.manage',
   ],
   viewer: [
     'orders.view',
@@ -156,6 +162,7 @@ export const ROLE_PRESETS: Record<string, string[]> = {
     'knowledge.view',
     'settings.view',
     'health.view',
+    'marketing.view',
   ],
 };
 

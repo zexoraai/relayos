@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { Queue, Job } from 'bullmq';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getRedisConnection } from '../queue';
 import { getDb } from '../db/connection';
 import { config } from '../config';
@@ -42,7 +42,7 @@ interface QueueSummary {
 /**
  * GET /dlq/summary - one-row-per-queue snapshot for the dashboard header.
  */
-router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/summary', requirePermission('dlq.view'), async (req: AuthenticatedRequest, res: Response) => {
   const summaries: QueueSummary[] = [];
   for (const meta of TRACKED_QUEUES) {
     try {
@@ -83,7 +83,7 @@ router.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * GET /dlq/:queue/failed - failed jobs for a single queue.
  */
-router.get('/:queue/failed', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:queue/failed', requirePermission('dlq.view'), async (req: AuthenticatedRequest, res: Response) => {
   const queueName = req.params.queue as string;
   if (!TRACKED_QUEUES.some((q) => q.name === queueName)) {
     return res.status(404).json({ success: false, error: { code: 'UNKNOWN_QUEUE', message: 'Unknown queue' } });
@@ -100,7 +100,7 @@ router.get('/:queue/failed', async (req: AuthenticatedRequest, res: Response) =>
 /**
  * POST /dlq/:queue/retry - re-enqueue a failed job by id.
  */
-router.post('/:queue/retry', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:queue/retry', requirePermission('dlq.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const queueName = req.params.queue as string;
   const { job_id } = req.body || {};
   if (!job_id) return res.status(400).json({ success: false, error: { code: 'MISSING_JOB_ID', message: 'job_id required' } });
@@ -120,7 +120,7 @@ router.post('/:queue/retry', async (req: AuthenticatedRequest, res: Response) =>
 /**
  * POST /dlq/:queue/discard - permanently remove a failed job.
  */
-router.post('/:queue/discard', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/:queue/discard', requirePermission('dlq.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const queueName = req.params.queue as string;
   const { job_id } = req.body || {};
   if (!job_id) return res.status(400).json({ success: false, error: { code: 'MISSING_JOB_ID', message: 'job_id required' } });
@@ -140,7 +140,7 @@ router.post('/:queue/discard', async (req: AuthenticatedRequest, res: Response) 
 /**
  * GET /dlq/outbox - failed outbox events for the tenant.
  */
-router.get('/outbox', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/outbox', requirePermission('dlq.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -157,7 +157,7 @@ router.get('/outbox', async (req: AuthenticatedRequest, res: Response) => {
 /**
  * POST /dlq/outbox/retry - reset a failed outbox event so the relay re-dispatches it.
  */
-router.post('/outbox/retry', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/outbox/retry', requirePermission('dlq.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { event_id } = req.body || {};
@@ -176,7 +176,7 @@ router.post('/outbox/retry', async (req: AuthenticatedRequest, res: Response) =>
 /**
  * POST /dlq/outbox/discard - mark a failed outbox event as dispatched (don't re-send).
  */
-router.post('/outbox/discard', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/outbox/discard', requirePermission('dlq.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const { event_id } = req.body || {};

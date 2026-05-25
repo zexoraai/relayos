@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { AuthenticatedRequest, authMiddleware } from './middleware';
+import { AuthenticatedRequest, authMiddleware, requirePermission } from './middleware';
 import { getDb } from '../db/connection';
 import { createChildLogger } from '../observability/logger';
 
@@ -8,7 +8,7 @@ const router = Router();
 
 router.use(authMiddleware);
 
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requirePermission('prompts.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const row = await db('chatbot_settings').where({ tenant_id: tenantId }).first();
@@ -18,7 +18,7 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   return res.status(200).json({ success: true, data: { configured: true, ...row } });
 });
 
-router.post('/', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/', requirePermission('prompts.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const {

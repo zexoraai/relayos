@@ -5,6 +5,7 @@
 const API = '';
 let token = localStorage.getItem('token');
 let currentTab = 'overview';
+let currentUserPermissions = []; // populated on /auth/me; gates sidebar + switchTab
 let pipelineJobs = [];
 let fulfillmentJobs = [];
 
@@ -65,7 +66,20 @@ async function api(method, path, body) {
   try {
     const res = await fetch(API + path, opts);
     const data = await res.json();
-    if (res.status === 401) { token = null; localStorage.removeItem('token'); showPage('login'); }
+    if (res.status === 401) {
+      // Force re-login on legacy / expired tokens
+      const code = data && data.error && data.error.code;
+      if (code === 'TOKEN_EXPIRED_REAUTH_REQUIRED' || code === 'INVALID_TOKEN' || code === 'UNAUTHORIZED') {
+        token = null; currentUserPermissions = [];
+        localStorage.removeItem('token');
+        showPage('login');
+        if (code === 'TOKEN_EXPIRED_REAUTH_REQUIRED') {
+          toast('Session expired — please log in again', 'warning', 5000);
+        }
+      } else {
+        token = null; localStorage.removeItem('token'); showPage('login');
+      }
+    }
     return { status: res.status, data };
   } catch (e) { return { status: 0, data: { success: false, error: { message: e.message } } }; }
 }
@@ -89,7 +103,7 @@ async function doLogin() {
   token = data.data.token; localStorage.setItem('token', token);
   if (data.data.tenant.status === 'active') loadDashboard(); else loadOnboarding();
 }
-function doLogout() { token = null; localStorage.removeItem('token'); showPage('login'); }
+function doLogout() { token = null; currentUserPermissions = []; localStorage.removeItem('token'); showPage('login'); }
 
 // ---- Onboarding ----
 
@@ -137,9 +151,87 @@ async function completeOnboarding(){const{data}=await api('POST','/onboarding/co
 
 // ---- Dashboard ----
 
-async function loadDashboard() { showApp(); switchTab('overview'); }
+async function loadDashboard() {
+  // Refresh permissions from server before showing the app shell. /auth/me
+  // returns the live permission list (not the JWT snapshot), so freshly-edited
+  // roles take effect on the next page load.
+  const meRes = await api('GET', '/auth/me');
+  if (meRes.status === 200 && meRes.data && meRes.data.success) {
+    currentUserPermissions = (meRes.data.data.user && meRes.data.data.user.permissions) || [];
+  } else {
+    // /auth/me failed — api() already redirected to login on 401
+    return;
+  }
+  showApp();
+  if (window.RelayPermissions) window.RelayPermissions.applySidebarFilter(currentUserPermissions);
+  // Pick a tab the user can actually see (defaults to overview)
+  const firstAllowedTab = pickFirstAllowedTab();
+  switchTab(firstAllowedTab);
+}
+
+function pickFirstAllowedTab() {
+  if (!window.RelayPermissions) return 'overview';
+  if (window.RelayPermissions.canSeeTab(currentUserPermissions, 'overview')) return 'overview';
+  // Try the tabs in display order
+  const order = ['pipeline','packing','manual-upload','collections','fulfillment','customers','agents','chatbot-config','caretaker','whatsapp','marketing','inbox','knowledge','users','settings','usage','failed','health'];
+  for (const t of order) {
+    if (window.RelayPermissions.canSeeTab(currentUserPermissions, t)) return t;
+  }
+  return 'overview';
+}
+
+/**
+ * Render a stable empty-state panel into `container` when the current user
+ * is not allowed to see `tab`. Idempotent: calling it twice with the same
+ * arguments produces the same DOM (the inner `#forbidden-state` panel is
+ * reused if it already exists, otherwise the container is cleared and the
+ * panel is appended).
+ *
+ * The secondary line names the missing permission set, sourced from
+ * RelayPermissions.TAB_PERMISSIONS so the explanation matches the check
+ * performed in canSeeTab. Designed to render into the active content area
+ * (e.g. #tab-content), not document.body, so deep-link / hash-routing
+ * invocations of switchTab still produce the panel inline.
+ */
+function renderForbiddenState(container, tab) {
+  if (!container) return;
+  const tabPerms = (window.RelayPermissions && window.RelayPermissions.TAB_PERMISSIONS) || {};
+  const required = tabPerms[tab];
+  let detail = '';
+  if (Array.isArray(required)) {
+    if (required.length > 0) detail = 'Requires permission: ' + required.join(' or ');
+  } else if (typeof required === 'string' && required) {
+    detail = 'Requires permission: ' + required;
+  }
+
+  let panel = container.querySelector('#forbidden-state');
+  if (!panel) {
+    container.innerHTML = '';
+    panel = document.createElement('div');
+    panel.id = 'forbidden-state';
+    panel.className = 'flex flex-col items-center justify-center py-20 text-center';
+    container.appendChild(panel);
+  }
+  panel.innerHTML =
+    '<div class="text-4xl opacity-20 mb-3">&#128274;</div>' +
+    '<h3 class="font-semibold text-base mb-1">Not authorized for this view</h3>' +
+    (detail
+      ? '<p class="text-sm text-gray-400 max-w-xs mx-auto">' + escapeHtml(detail) + '</p>'
+      : '');
+}
 
 function switchTab(tab) {
+  // Frontend guard. Server-side requirePermission is the real enforcement —
+  // this just keeps the UI from showing forbidden views to the user.
+  if (window.RelayPermissions && !window.RelayPermissions.canSeeTab(currentUserPermissions, tab)) {
+    // Do NOT mutate currentTab and do NOT call the per-tab loader. Render a
+    // stable empty-state panel into the currently-active content area so a
+    // direct deep link to a forbidden tab leaves a clear explanation in
+    // place of the previous view.
+    const activeContainer = document.getElementById('tab-content');
+    renderForbiddenState(activeContainer, tab);
+    return;
+  }
   currentTab = tab;
   document.getElementById('page-title').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
   const subtitles = { overview:'Welcome back', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
@@ -1397,6 +1489,7 @@ async function deleteKbDoc(id) { await api('DELETE','/knowledge/'+id); renderKno
     if (status === 200 && data.success) {
       const initial = (data.data.tenant.email||'U')[0].toUpperCase();
       document.getElementById('user-avatar').textContent = initial;
+      currentUserPermissions = (data.data.user && data.data.user.permissions) || [];
       if (data.data.tenant.status === 'active') loadDashboard(); else loadOnboarding();
     } else { token = null; localStorage.removeItem('token'); showPage('login'); }
   } else { showPage('login'); }
@@ -1752,6 +1845,15 @@ async function renderUsers() {
   const users = usersRes && usersRes.success ? usersRes.data : [];
   _permissionCatalog = catRes && catRes.success ? catRes.data : { permissions: [], role_presets: {} };
 
+  // Identify super-admins (any user holding the wildcard '*' permission).
+  // Per Requirement 5.5, while at least one such user exists the Team & Roles
+  // tab shows a "Review super-admin assignments" banner with an anchor that
+  // jumps to the first affected row. The banner is part of the rendered html
+  // below, so re-rendering this tab naturally removes a stale banner once no
+  // user holds '*' (no separate cleanup pass needed).
+  const superAdmins = users.filter(u => Array.isArray(u.permissions) && u.permissions.includes('*'));
+  const firstSuperAdminId = superAdmins.length ? superAdmins[0].id : null;
+
   let html = '';
 
   // Top action: invite
@@ -1759,6 +1861,17 @@ async function renderUsers() {
   html += `<div><h3 class="text-lg font-bold">Team Members (${users.length})</h3><p class="text-sm text-gray-400 mt-0.5">Invite colleagues and assign permissions per module</p></div>`;
   html += `<button onclick="showInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Invite User</button>`;
   html += `</div>`;
+
+  // Super-admin review banner. Reuses the same amber callout look as the
+  // "Super Admin (all permissions)" warning in the Edit Permissions modal so
+  // no new styles are introduced. Rendered only when at least one user holds
+  // '*'; absent otherwise (Requirement 5.5).
+  if (firstSuperAdminId) {
+    html += `<div id="super-admin-review-banner" class="bg-amber-50 text-amber-700 border border-amber-200 rounded-2xl px-4 py-3 mb-4 flex items-center justify-between gap-3 text-sm">`;
+    html += `<span class="font-medium">Review super-admin assignments</span>`;
+    html += `<a href="#user-row-${firstSuperAdminId}" onclick="scrollToSuperAdminRow(event, '${firstSuperAdminId}')" class="text-amber-800 font-semibold hover:underline whitespace-nowrap">Jump to user &rarr;</a>`;
+    html += `</div>`;
+  }
 
   // Users table
   html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden">`;
@@ -1772,7 +1885,8 @@ async function renderUsers() {
       const isSuperAdmin = (u.permissions || []).includes('*');
       const permsLabel = isSuperAdmin ? 'Super Admin (all)' : (u.permissions || []).length + ' permissions';
       const lastLogin = u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never';
-      html += `<tr class="border-b border-gray-50 hover:bg-surface-100 transition-all">`;
+      // Stable per-row id so the banner anchor can target the first super-admin.
+      html += `<tr id="user-row-${u.id}" class="border-b border-gray-50 hover:bg-surface-100 transition-all">`;
       html += `<td class="px-5 py-3"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm">${(u.email||'?')[0].toUpperCase()}</div><div><div class="font-medium">${escapeHtml(u.display_name||u.email)}</div><div class="text-xs text-gray-400">${escapeHtml(u.email)}</div></div></div></td>`;
       html += `<td class="px-5 py-3">${badge(u.status==='active'?'completed':'failed', u.status)}</td>`;
       html += `<td class="px-5 py-3"><span class="text-xs ${isSuperAdmin?'text-amber-600 font-semibold':''}">${permsLabel}</span></td>`;
@@ -1785,6 +1899,21 @@ async function renderUsers() {
   html += `</div>`;
 
   document.getElementById('tab-content').innerHTML = html;
+}
+
+/**
+ * Smooth-scroll the Team & Roles user row matching `userId` into view. Used
+ * by the "Review super-admin assignments" banner. We intercept the anchor's
+ * default jump because the table lives inside the dashboard content area
+ * rather than the document root, so a plain `#user-row-...` href can produce
+ * a jarring jump or no-op depending on layout.
+ */
+function scrollToSuperAdminRow(event, userId) {
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  const row = document.getElementById('user-row-' + userId);
+  if (row && typeof row.scrollIntoView === 'function') {
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 function showInviteModal() {

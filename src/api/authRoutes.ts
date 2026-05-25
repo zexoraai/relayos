@@ -64,6 +64,30 @@ router.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Respons
       error: { code: 'TENANT_NOT_FOUND', message: 'Tenant not found' },
     });
   }
+
+  // Re-query permissions live from the DB so a freshly-modified permission
+  // set is reflected immediately on the next /auth/me poll. JWT permissions
+  // are a snapshot at login time and may be stale.
+  let permissions: string[] | null = null;
+  if (req.tenant!.userId) {
+    const { getDb } = await import('../db/connection');
+    const db = getDb();
+    const rows = await db('user_permissions').where({ user_id: req.tenant!.userId }).select('permission');
+    permissions = rows.map((r: any) => r.permission);
+  }
+
+  // Legacy token (no userId / no permissions claim) → force re-auth so the
+  // backfill mints a fresh token with the correct permissions array.
+  if (permissions === null || req.tenant!.permissions === undefined) {
+    return res.status(401).json({
+      success: false,
+      error: {
+        code: 'TOKEN_EXPIRED_REAUTH_REQUIRED',
+        message: 'Your session predates the latest access-control update. Please log in again.',
+      },
+    });
+  }
+
   return res.status(200).json({
     success: true,
     data: {
@@ -71,7 +95,7 @@ router.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Respons
       user: {
         id: req.tenant!.userId,
         email: req.tenant!.email,
-        permissions: req.tenant!.permissions || ['*'],
+        permissions,
       },
     },
   });
