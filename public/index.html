@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>RelayOS</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -76,8 +76,24 @@
         transform: translateX(0);
         box-shadow: 0 25px 80px rgba(0,0,0,0.4);
       }
-      #main-content { margin-left: 0 !important; padding: 1rem !important; }
-      #mobile-topbar { display: flex !important; }
+      /* The mobile topbar is fixed at top:0 with its own padding + safe-area
+         offset (see the rule below). Pad the main content area by that exact
+         total so first-row content (stat cards, filters, etc.) is never
+         tucked under the topbar. var(--mobile-topbar-h) is set in the
+         topbar rule and used here to keep the two in sync. */
+      #main-content {
+        margin-left: 0 !important;
+        padding: 1rem !important;
+        padding-top: calc(var(--mobile-topbar-h, 60px) + env(safe-area-inset-top, 0px) + 0.75rem) !important;
+      }
+      #mobile-topbar {
+        display: flex !important;
+        --mobile-topbar-h: 60px;
+        height: var(--mobile-topbar-h);
+        padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+        padding-bottom: 0.5rem;
+        box-sizing: content-box;
+      }
       #sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
 
       /* Page header is duplicated in the topbar on mobile, hide the inline one */
@@ -417,7 +433,7 @@
     </aside>
 
     <!-- Main -->
-    <main id="main-content" class="flex-1 ml-[240px] p-8 overflow-y-auto transition-all duration-300 pt-20 md:pt-8">
+    <main id="main-content" class="flex-1 ml-[240px] p-8 overflow-y-auto transition-all duration-300">
       <div class="max-w-7xl mx-auto px-4 md:px-0">
         <div class="flex items-center justify-between mb-8">
           <div>
