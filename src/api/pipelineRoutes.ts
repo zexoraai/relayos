@@ -10,7 +10,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // GET /pipeline/jobs - List pipeline jobs for the tenant
-router.get('/jobs', requirePermission('orders.view'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/jobs', requirePermission('pipeline.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -32,7 +32,7 @@ router.get('/jobs', requirePermission('orders.view'), async (req: AuthenticatedR
 });
 
 // GET /pipeline/jobs/:id - Get pipeline job details with stage results
-router.get('/jobs/:id', requirePermission('orders.view'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/jobs/:id', requirePermission('pipeline.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id;
@@ -57,7 +57,7 @@ router.get('/jobs/:id', requirePermission('orders.view'), async (req: Authentica
 });
 
 // GET /pipeline/stats - Pipeline statistics for the tenant
-router.get('/stats', requirePermission('orders.view'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/stats', requirePermission('pipeline.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
 
@@ -90,7 +90,7 @@ router.get('/stats', requirePermission('orders.view'), async (req: Authenticated
 });
 
 // POST /pipeline/trigger/:emailId - Manually trigger pipeline for an email
-router.post('/trigger/:emailId', requirePermission('orders.manage'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/trigger/:emailId', requirePermission('pipeline.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const emailId = req.params.emailId as string;
@@ -134,7 +134,7 @@ router.post('/trigger/:emailId', requirePermission('orders.manage'), async (req:
  *  - Deletes the resulting order if one was created (so re-run can recreate it cleanly)
  *  - Re-enqueues the BullMQ job referencing the same email
  */
-router.post('/jobs/:id/reprocess', requirePermission('orders.manage'), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/jobs/:id/reprocess', requirePermission('pipeline.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const jobId = req.params.id;

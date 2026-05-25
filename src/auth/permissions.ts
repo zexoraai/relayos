@@ -8,6 +8,13 @@
  */
 
 export const PERMISSIONS = {
+  DASHBOARD: {
+    VIEW: 'dashboard.view',
+  },
+  PIPELINE: {
+    VIEW: 'pipeline.view',
+    MANAGE: 'pipeline.manage',
+  },
   ORDERS: {
     VIEW: 'orders.view',
     MANAGE: 'orders.manage',
@@ -117,6 +124,8 @@ export function hasAnyPermission(userPermissions: string[], required: string[]):
 export const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ['*'],
   operations: [
+    'dashboard.view',
+    'pipeline.*',
     'orders.*',
     'fulfillment.*',
     'customers.*',
@@ -152,6 +161,8 @@ export const ROLE_PRESETS: Record<string, string[]> = {
     'marketing.manage',
   ],
   viewer: [
+    'dashboard.view',
+    'pipeline.view',
     'orders.view',
     'fulfillment.view',
     'customers.view',

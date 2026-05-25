@@ -110,11 +110,11 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   // ------------------------------------------------------------------
   // pipelineRoutes.ts (mounted at /pipeline)
   // ------------------------------------------------------------------
-  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/jobs', permission: PERMISSIONS.ORDERS.VIEW },
-  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/jobs/:id', permission: PERMISSIONS.ORDERS.VIEW },
-  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/stats', permission: PERMISSIONS.ORDERS.VIEW },
-  { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/trigger/:emailId', permission: PERMISSIONS.ORDERS.MANAGE },
-  { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/jobs/:id/reprocess', permission: PERMISSIONS.ORDERS.MANAGE },
+  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/jobs', permission: PERMISSIONS.PIPELINE.VIEW },
+  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/jobs/:id', permission: PERMISSIONS.PIPELINE.VIEW },
+  { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/stats', permission: PERMISSIONS.PIPELINE.VIEW },
+  { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/trigger/:emailId', permission: PERMISSIONS.PIPELINE.MANAGE },
+  { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/jobs/:id/reprocess', permission: PERMISSIONS.PIPELINE.MANAGE },
 
   // ------------------------------------------------------------------
   // fulfillmentRoutes.ts (mounted at /fulfillment)

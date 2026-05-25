@@ -44,8 +44,8 @@
    * authenticated users (e.g. overview).
    */
   const TAB_PERMISSIONS = {
-    overview: null,                                      // any authenticated user
-    pipeline: 'orders.view',
+    overview: 'dashboard.view',
+    pipeline: 'pipeline.view',
     packing: 'orders.view',
     'manual-upload': 'orders.view',
     collections: 'orders.view',
