@@ -45,7 +45,7 @@
     ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: #d1d5db; }
 
-    /* Sidebar states */
+    /* Sidebar states (desktop only) */
     .sidebar-expanded { width: 240px; }
     .sidebar-collapsed { width: 64px; }
     .sidebar-collapsed .sidebar-label { display: none; }
@@ -57,6 +57,113 @@
     /* Section collapse */
     .nav-section-items.collapsed { display: none; }
     .nav-chevron.rotated { transform: rotate(-90deg); }
+
+    /* ============================================================
+       MOBILE-FIRST RESPONSIVE LAYER
+       Activated below md (768px). On desktop the existing layout
+       wins because these rules either stack stricter (max-width: 767px)
+       or are overridden by md: utility classes already on the markup.
+       ============================================================ */
+
+    /* Off-canvas sidebar */
+    @media (max-width: 767px) {
+      #sidebar {
+        width: 280px !important;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+      }
+      #sidebar.drawer-open {
+        transform: translateX(0);
+        box-shadow: 0 25px 80px rgba(0,0,0,0.4);
+      }
+      #main-content { margin-left: 0 !important; padding: 1rem !important; }
+      #mobile-topbar { display: flex !important; }
+      #sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
+
+      /* Page header is duplicated in the topbar on mobile, hide the inline one */
+      #main-content > .max-w-7xl > .flex.items-center.justify-between.mb-8 { display: none; }
+
+      /* Tables auto-convert to cards via [data-label] attribute on td */
+      table.responsive-table thead { display: none; }
+      table.responsive-table tr {
+        display: block;
+        background: #fff;
+        border-radius: 1rem;
+        margin-bottom: 0.75rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+        padding: 0.75rem 1rem;
+        border: none !important;
+      }
+      table.responsive-table td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.4rem 0 !important;
+        border: none !important;
+        text-align: right;
+        gap: 1rem;
+      }
+      table.responsive-table td::before {
+        content: attr(data-label);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9ca3af;
+        font-weight: 600;
+        text-align: left;
+        flex-shrink: 0;
+      }
+      table.responsive-table td:not([data-label])::before { content: ''; }
+      /* If a cell has no data-label, let it span full width (action rows etc.) */
+      table.responsive-table td:not([data-label]) {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+
+      /* Modals slide up from the bottom on mobile */
+      .modal-mobile-sheet {
+        align-items: flex-end !important;
+        padding: 0 !important;
+      }
+      .modal-mobile-sheet > div {
+        max-width: 100% !important;
+        width: 100% !important;
+        border-bottom-left-radius: 0 !important;
+        border-bottom-right-radius: 0 !important;
+        border-top-left-radius: 1.5rem !important;
+        border-top-right-radius: 1.5rem !important;
+        max-height: 92vh !important;
+        animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+      }
+      @keyframes slideUp {
+        from { transform: translateY(100%); }
+        to { transform: translateY(0); }
+      }
+
+      /* Cards full-bleed look on mobile */
+      .max-w-7xl { padding-left: 0 !important; padding-right: 0 !important; }
+      .grid.grid-cols-2, .grid.grid-cols-3, .grid.grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
+      .lg\\:grid-cols-3, .lg\\:grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
+      .md\\:grid-cols-2, .md\\:grid-cols-3, .md\\:grid-cols-4 { grid-template-columns: 1fr 1fr !important; }
+      h1.text-2xl, h1.text-3xl { font-size: 1.25rem !important; }
+
+      /* Tap targets */
+      button, .sidebar-item span { min-height: 44px; }
+
+      /* Scrollable horizontal regions get snap behaviour for nicer swipe */
+      .h-snap { display: flex; gap: 0.75rem; overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; padding-bottom: 0.5rem; }
+      .h-snap > * { scroll-snap-align: start; flex: 0 0 85%; }
+    }
+
+    /* Desktop hides the mobile topbar */
+    #mobile-topbar { display: none; }
+    #sidebar-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.3s ease;
+      z-index: 40;
+    }
 
     /* Dark mode */
     .dark body, body.dark { background: #0f0f14 !important; color: #e5e7eb; }
@@ -138,6 +245,20 @@
 
   <!-- DASHBOARD -->
   <div id="app-layout" class="hidden flex min-h-screen">
+    <!-- Mobile topbar (hamburger + page title + avatar). Hidden on md+ -->
+    <header id="mobile-topbar" class="md:hidden fixed top-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 items-center justify-between">
+      <button onclick="openDrawer()" aria-label="Open menu" class="w-10 h-10 rounded-xl bg-surface-100 flex items-center justify-center text-gray-700 active:scale-95 transition-transform">
+        <i data-lucide="menu" class="w-5 h-5"></i>
+      </button>
+      <div class="flex-1 text-center px-2">
+        <h2 id="mobile-page-title" class="text-base font-bold tracking-tight truncate">Overview</h2>
+      </div>
+      <div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm" id="mobile-user-avatar">U</div>
+    </header>
+
+    <!-- Sidebar backdrop (mobile drawer overlay) -->
+    <div id="sidebar-backdrop" onclick="closeDrawer()"></div>
+
     <!-- Sidebar -->
     <aside id="sidebar" class="sidebar-expanded bg-dark-900 text-white flex flex-col fixed inset-y-0 left-0 z-50 transition-all duration-300">
       <!-- Logo + collapse toggle -->
@@ -225,8 +346,8 @@
     </aside>
 
     <!-- Main -->
-    <main id="main-content" class="flex-1 ml-[240px] p-8 overflow-y-auto transition-all duration-300">
-      <div class="max-w-7xl mx-auto">
+    <main id="main-content" class="flex-1 ml-[240px] p-8 overflow-y-auto transition-all duration-300 pt-20 md:pt-8">
+      <div class="max-w-7xl mx-auto px-4 md:px-0">
         <div class="flex items-center justify-between mb-8">
           <div>
             <h1 id="page-title" class="text-2xl font-bold tracking-tight">Overview</h1>
@@ -255,6 +376,8 @@
 
     // Sidebar collapse/expand
     function toggleSidebar() {
+      // On mobile, the toggle button maps to "close drawer"
+      if (window.innerWidth < 768) { closeDrawer(); return; }
       const sidebar = document.getElementById('sidebar');
       const main = document.getElementById('main-content');
       const isExpanded = sidebar.classList.contains('sidebar-expanded');
@@ -270,13 +393,44 @@
       localStorage.setItem('sidebar_collapsed', !isExpanded ? 'true' : 'false');
     }
 
-    // Restore sidebar state
-    if (localStorage.getItem('sidebar_collapsed') === 'true') {
+    // Mobile drawer
+    function openDrawer() {
+      const sb = document.getElementById('sidebar');
+      const bd = document.getElementById('sidebar-backdrop');
+      sb.classList.add('drawer-open');
+      bd.classList.add('visible');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeDrawer() {
+      const sb = document.getElementById('sidebar');
+      const bd = document.getElementById('sidebar-backdrop');
+      sb.classList.remove('drawer-open');
+      bd.classList.remove('visible');
+      document.body.style.overflow = '';
+    }
+
+    // Restore sidebar state (desktop only)
+    if (window.innerWidth >= 768 && localStorage.getItem('sidebar_collapsed') === 'true') {
       const sidebar = document.getElementById('sidebar');
       const main = document.getElementById('main-content');
       if (sidebar) { sidebar.classList.remove('sidebar-expanded'); sidebar.classList.add('sidebar-collapsed'); }
       if (main) main.style.marginLeft = '64px';
     }
+
+    // Adjust margin on resize crossing the breakpoint so a desktop user
+    // shrinking the window doesn't end up with a 240px offset.
+    window.addEventListener('resize', () => {
+      const main = document.getElementById('main-content');
+      if (!main) return;
+      if (window.innerWidth < 768) {
+        main.style.marginLeft = '0';
+        closeDrawer();
+      } else {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && sidebar.classList.contains('sidebar-collapsed')) main.style.marginLeft = '64px';
+        else main.style.marginLeft = '240px';
+      }
+    });
 
     // Section fold/unfold
     function toggleNavSection(btn) {
@@ -306,7 +460,19 @@
     if (_origSwitchTab) {
       window.switchTab = function(tab) {
         _origSwitchTab(tab);
-        setTimeout(() => lucide.createIcons(), 50);
+        setTimeout(() => {
+          lucide.createIcons();
+          // Sync the mobile topbar title with the desktop page title
+          const desktopTitle = document.getElementById('page-title');
+          const mobileTitle = document.getElementById('mobile-page-title');
+          if (desktopTitle && mobileTitle) mobileTitle.textContent = desktopTitle.textContent;
+          // Sync the mobile avatar
+          const desktopAvatar = document.getElementById('user-avatar');
+          const mobileAvatar = document.getElementById('mobile-user-avatar');
+          if (desktopAvatar && mobileAvatar) mobileAvatar.textContent = desktopAvatar.textContent;
+        }, 50);
+        // Auto-close mobile drawer when navigating
+        if (window.innerWidth < 768) closeDrawer();
       };
     }
   </script>

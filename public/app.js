@@ -22,15 +22,20 @@ function toast(message, type = 'info', duration = 3500) {
 }
 
 function openModal(title, bodyHtml, footerHtml = '') {
+  // The `modal-mobile-sheet` class transforms the modal into a bottom-sheet
+  // on screens narrower than 768px (rule lives in public/index.html <style>).
+  // On desktop it has no visual effect — the centered card layout wins.
   document.getElementById('modal-root').innerHTML = `
-    <div class="fixed inset-0 bg-black/40 modal-backdrop z-[1000] flex items-center justify-center p-4" onclick="closeModal(event)">
+    <div class="fixed inset-0 bg-black/40 modal-backdrop z-[1000] flex items-center justify-center p-4 modal-mobile-sheet" onclick="closeModal(event)">
       <div class="bg-white rounded-3xl shadow-elevated w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fadeUp" onclick="event.stopPropagation()">
-        <div class="flex items-center justify-between p-6 border-b border-gray-100">
+        <!-- Drag handle (mobile bottom-sheet affordance) -->
+        <div class="md:hidden w-12 h-1.5 bg-gray-300 rounded-full mx-auto mt-3"></div>
+        <div class="flex items-center justify-between p-4 md:p-6 md:border-b border-gray-100">
           <h2 class="text-lg font-bold">${title}</h2>
-          <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-500 text-lg transition-colors">&times;</button>
+          <button onclick="closeModal()" aria-label="Close" class="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 active:scale-95 flex items-center justify-center text-gray-600 text-lg transition-all">&times;</button>
         </div>
-        <div class="p-6">${bodyHtml}</div>
-        ${footerHtml ? `<div class="flex justify-end gap-2 p-6 pt-0">${footerHtml}</div>` : ''}
+        <div class="px-4 pb-4 md:p-6 md:pt-0">${bodyHtml}</div>
+        ${footerHtml ? `<div class="flex flex-col-reverse md:flex-row md:justify-end gap-2 px-4 pb-4 md:p-6 md:pt-0">${footerHtml}</div>` : ''}
       </div>
     </div>`;
 }
@@ -40,6 +45,52 @@ function closeModal(e) {
 }
 
 function escapeHtml(str) { return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/**
+ * Mobile-responsive table decorator.
+ *
+ * Tables in this app are rendered ad-hoc by a couple dozen tab functions and
+ * we don't want to touch every renderer. Instead, watch #tab-content for
+ * mutations and on every new <table>:
+ *   1. Add the `responsive-table` class so the mobile CSS can transform
+ *      rows into card stacks below 768px.
+ *   2. Copy each <th>'s text into `data-label` on the matching <td> so the
+ *      stacked card view shows column labels next to values.
+ * Idempotent: skips tables already decorated.
+ */
+function decorateResponsiveTable(table) {
+  if (!table || table.dataset.respDone === '1') return;
+  table.classList.add('responsive-table');
+  const headers = Array.from(table.querySelectorAll('thead th')).map((th) =>
+    (th.textContent || '').trim(),
+  );
+  if (headers.length > 0) {
+    table.querySelectorAll('tbody tr').forEach((tr) => {
+      const cells = tr.querySelectorAll('td');
+      cells.forEach((td, i) => {
+        if (!td.hasAttribute('data-label') && headers[i]) {
+          td.setAttribute('data-label', headers[i]);
+        }
+      });
+    });
+  }
+  table.dataset.respDone = '1';
+}
+
+function _installResponsiveTableObserver() {
+  const root = document.getElementById('tab-content');
+  if (!root) {
+    // tab-content isn't in the DOM yet (login screen). Try again later.
+    setTimeout(_installResponsiveTableObserver, 250);
+    return;
+  }
+  const decorateAll = () => root.querySelectorAll('table').forEach(decorateResponsiveTable);
+  decorateAll();
+  new MutationObserver(decorateAll).observe(root, { childList: true, subtree: true });
+}
+document.addEventListener('DOMContentLoaded', _installResponsiveTableObserver);
+// In case the script runs after DOMContentLoaded (defer/async):
+if (document.readyState !== 'loading') _installResponsiveTableObserver();
 
 function showPage(page) {
   document.getElementById('auth-container').classList.remove('hidden');
