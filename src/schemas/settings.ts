@@ -12,6 +12,22 @@ export const collectionContactBodySchema = z.object({
   contact_phone: phoneSchema,
   special_instructions: z.string().max(1024).optional(),
   collection_terminal_id: z.string().max(50).optional().nullable(),
+  // Door collection methods (door-to-locker, door-to-door) require a full
+  // street address on the collection side. Same shape as PUDO's delivery
+  // address. Only validated when present — locker collection still works
+  // with just `collection_terminal_id`.
+  collection_address: z.object({
+    lat: z.number().nullable().optional(),
+    lng: z.number().nullable().optional(),
+    street_address: z.string().min(1).max(256),
+    local_area: z.string().max(128).optional(),
+    suburb: z.string().max(128).optional(),
+    city: z.string().min(1).max(128),
+    code: z.string().min(4).max(10),
+    zone: z.string().min(1).max(64),
+    country: z.string().min(2).max(64).optional(),
+    type: z.enum(['residential', 'business']).optional(),
+  }).optional().nullable(),
 });
 
 export const whatsappSettingsBodySchema = z.object({

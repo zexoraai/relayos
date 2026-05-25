@@ -320,6 +320,7 @@ router.get('/collection-contact', requirePermission('settings.view'), async (req
       contact_phone: settings.contact_phone,
       special_instructions: settings.special_instructions,
       collection_terminal_id: settings.collection_terminal_id,
+      collection_address: settings.collection_address || null,
       updated_at: settings.updated_at,
     },
   });
@@ -329,7 +330,7 @@ router.get('/collection-contact', requirePermission('settings.view'), async (req
 router.post('/collection-contact', requirePermission('settings.collection.manage'), validateBody(collectionContactBodySchema), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
-  const { contact_name, contact_email, contact_phone, special_instructions, collection_terminal_id } = req.body;
+  const { contact_name, contact_email, contact_phone, special_instructions, collection_terminal_id, collection_address } = req.body;
 
   const existing = await db('tenant_collection_settings').where({ tenant_id: tenantId }).first();
   const data = {
@@ -339,6 +340,7 @@ router.post('/collection-contact', requirePermission('settings.collection.manage
     contact_phone,
     special_instructions: special_instructions || 'None',
     collection_terminal_id: collection_terminal_id || null,
+    collection_address: collection_address ? JSON.stringify(collection_address) : null,
   };
 
   if (existing) {

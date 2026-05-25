@@ -1292,10 +1292,39 @@ async function renderSettings() {
   if (pudo.configured) html += `<button onclick="deleteSettingsPudo()" class="px-4 py-2.5 bg-red-50 text-red-500 font-semibold rounded-full text-sm hover:bg-red-100 transition-all">Remove</button>`;
   html += `</div></div>`;
   // Collection
-  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Collection Contact</h3>`;  html += `<div class="space-y-3"><div><label class="block text-xs text-gray-400 mb-1">Name</label><input id="set-coll-name" value="${coll.contact_name||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
-  html += `<div><label class="block text-xs text-gray-400 mb-1">Email</label><input id="set-coll-email" value="${coll.contact_email||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
-  html += `<div><label class="block text-xs text-gray-400 mb-1">Phone</label><input id="set-coll-phone" value="${coll.contact_phone||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
-  html += `<div><label class="block text-xs text-gray-400 mb-1">Terminal ID</label><input id="set-coll-terminal" value="${coll.collection_terminal_id||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Collection Contact</h3>`;
+  html += `<p class="text-xs text-gray-400 -mt-3 mb-4">Used for every PUDO shipment. Locker methods only need the Terminal ID. Door-to-locker / door-to-door methods also need the street address below.</p>`;
+  html += `<div class="space-y-3">`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Name</label><input id="set-coll-name" value="${escapeHtml(coll.contact_name||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Email</label><input id="set-coll-email" value="${escapeHtml(coll.contact_email||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Phone</label><input id="set-coll-phone" value="${escapeHtml(coll.contact_phone||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+  html += `<div><label class="block text-xs text-gray-400 mb-1">Terminal ID <span class="text-gray-300">(locker collection)</span></label><input id="set-coll-terminal" value="${escapeHtml(coll.collection_terminal_id||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+
+  // --- Door collection block (only used when delivery method is door-to-* ) ---
+  const ca = coll.collection_address || {};
+  html += `<div class="pt-3 border-t border-gray-100 mt-3">`;
+  html += `<div class="flex items-center justify-between mb-2"><label class="text-xs font-semibold text-gray-500">Door collection address <span class="font-normal text-gray-300">(door-to-locker / door-to-door)</span></label></div>`;
+  html += `<div class="space-y-2">`;
+  html += `<input id="set-coll-street" placeholder="Street address" value="${escapeHtml(ca.street_address||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `<div class="grid grid-cols-2 gap-2">`;
+  html += `<input id="set-coll-suburb" placeholder="Suburb" value="${escapeHtml(ca.suburb||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `<input id="set-coll-city" placeholder="City" value="${escapeHtml(ca.city||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `</div>`;
+  html += `<div class="grid grid-cols-3 gap-2">`;
+  html += `<input id="set-coll-zone" placeholder="Province" value="${escapeHtml(ca.zone||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `<input id="set-coll-code" placeholder="Postal code" value="${escapeHtml(ca.code||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `<select id="set-coll-type" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  const types = ['business','residential'];
+  const curType = (ca.type === 'residential' ? 'residential' : 'business');
+  for (const t of types) html += `<option value="${t}"${curType===t?' selected':''}>${t}</option>`;
+  html += `</select>`;
+  html += `</div>`;
+  html += `<div class="grid grid-cols-2 gap-2">`;
+  html += `<input id="set-coll-lat" type="number" step="any" placeholder="Latitude (optional)" value="${ca.lat ?? ''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `<input id="set-coll-lng" type="number" step="any" placeholder="Longitude (optional)" value="${ca.lng ?? ''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+  html += `</div>`;
+  html += `</div></div>`;
+
   html += `</div><button onclick="saveSettingsCollection()" class="mt-4 w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save</button></div>`;
   html += `</div>`;
   document.getElementById('tab-content').innerHTML = html;
@@ -1341,7 +1370,44 @@ async function deleteSettingsPudo() {
   if (data.success) { toast('PUDO removed', 'info'); renderSettings(); }
   else toast(data.error?.message || 'Failed', 'error');
 }
-async function saveSettingsCollection() { const b={contact_name:document.getElementById('set-coll-name').value,contact_email:document.getElementById('set-coll-email').value,contact_phone:document.getElementById('set-coll-phone').value,collection_terminal_id:document.getElementById('set-coll-terminal').value}; const{data}=await api('POST','/settings/collection-contact',b); if(data.success)toast('Collection contact saved','success');else toast(data.error?.message||'Failed','error'); }
+async function saveSettingsCollection() {
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const num = (id) => { const s = v(id); if (!s) return null; const n = parseFloat(s); return Number.isFinite(n) ? n : null; };
+
+  // Build the optional door collection address: only send it if at least
+  // street_address + city + zone + code are filled. Otherwise the server
+  // schema would reject a half-filled object.
+  let collectionAddress = null;
+  const street = v('set-coll-street');
+  const city   = v('set-coll-city');
+  const zone   = v('set-coll-zone');
+  const code   = v('set-coll-code');
+  if (street && city && zone && code) {
+    collectionAddress = {
+      street_address: street,
+      local_area: '',
+      suburb: v('set-coll-suburb'),
+      city,
+      zone,
+      code,
+      country: 'South Africa',
+      type: v('set-coll-type') || 'business',
+      lat: num('set-coll-lat'),
+      lng: num('set-coll-lng'),
+    };
+  }
+
+  const b = {
+    contact_name: v('set-coll-name'),
+    contact_email: v('set-coll-email'),
+    contact_phone: v('set-coll-phone'),
+    collection_terminal_id: v('set-coll-terminal') || null,
+    collection_address: collectionAddress,
+  };
+  const { data } = await api('POST', '/settings/collection-contact', b);
+  if (data.success) toast('Collection contact saved', 'success');
+  else toast(data.error?.message || 'Failed', 'error');
+}
 
 async function renderWhatsApp() {
   const [{ data: settingsRes }, { data: bizRes }, { data: tplRes }, { data: eventsRes }, { data: msgRes }] = await Promise.all([
