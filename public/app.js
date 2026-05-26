@@ -826,6 +826,77 @@ async function showJobDetail(index, opts) {
     html += `</div></div>`;
   }
 
+  // Customer history block — repeat-customer trust signal. Renders only when
+  // the API resolved a customer for this order. Shows total order count,
+  // success-rate strip, and the 5 most recent prior orders so the operator
+  // can spot regulars or chronic problem accounts at a glance before
+  // approving a flagged review.
+  const ch = data.data.customer_history;
+  if (ch && ch.customer) {
+    const c = ch.customer;
+    const totals = (ch.totals && ch.totals.by_status) || {};
+    const totalAll = (ch.totals && ch.totals.all) || 0;
+    const completed = (totals.completed || 0) + (totals.delivered || 0);
+    const failed = (totals.failed || 0) + (totals.rejected || 0);
+    const cancelled = totals.cancelled || 0;
+    const inFlight = totalAll - completed - failed - cancelled;
+    const successPct = totalAll > 0 ? Math.round((completed / totalAll) * 100) : 0;
+
+    const lastOrderLabel = c.last_order_at
+      ? new Date(c.last_order_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+      : '-';
+    const firstOrderLabel = c.first_order_at
+      ? new Date(c.first_order_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' })
+      : '-';
+
+    html += `<div class="bg-white border border-gray-100 rounded-2xl p-4 mb-4">`;
+    html += `<div class="flex items-center justify-between mb-3">`;
+    html += `<div><div class="text-[10px] text-gray-400 uppercase font-semibold tracking-wide">Customer history</div>`;
+    html += `<div class="text-sm font-bold mt-0.5">${escapeHtml(c.name || '-')} <span class="text-gray-400 font-normal">${escapeHtml(c.phone || '')}</span></div></div>`;
+    // Quick navigation to the Customers tab detail
+    html += `<button onclick="switchTab('customers');setTimeout(()=>showCustomerDetail('${c.id}'),300)" class="text-[11px] text-brand-600 hover:underline whitespace-nowrap">Open profile &rarr;</button>`;
+    html += `</div>`;
+
+    // Aggregate stats
+    html += `<div class="grid grid-cols-4 gap-2 text-center mb-3">`;
+    html += `<div class="bg-surface-100 rounded-xl py-2"><div class="text-[10px] text-gray-400 uppercase">Total</div><div class="text-base font-bold">${totalAll}</div></div>`;
+    html += `<div class="bg-green-50 rounded-xl py-2"><div class="text-[10px] text-green-600 uppercase">Done</div><div class="text-base font-bold text-green-700">${completed}</div></div>`;
+    html += `<div class="bg-red-50 rounded-xl py-2"><div class="text-[10px] text-red-500 uppercase">Failed</div><div class="text-base font-bold text-red-600">${failed + cancelled}</div></div>`;
+    html += `<div class="bg-blue-50 rounded-xl py-2"><div class="text-[10px] text-blue-500 uppercase">In flight</div><div class="text-base font-bold text-blue-600">${Math.max(0, inFlight)}</div></div>`;
+    html += `</div>`;
+
+    // Success-rate strip + first/last order spans
+    html += `<div class="flex items-center justify-between text-[11px] text-gray-500">`;
+    html += `<span>Success rate <span class="font-semibold text-gray-700">${successPct}%</span></span>`;
+    html += `<span>First: <span class="text-gray-700">${firstOrderLabel}</span> &middot; Last: <span class="text-gray-700">${lastOrderLabel}</span></span>`;
+    html += `</div>`;
+
+    // Recent prior orders (max 5)
+    const recent = Array.isArray(ch.recent_orders) ? ch.recent_orders : [];
+    if (recent.length > 0) {
+      html += `<div class="mt-3 pt-3 border-t border-gray-100">`;
+      html += `<div class="text-[10px] text-gray-400 uppercase font-semibold tracking-wide mb-2">Recent (${recent.length})</div>`;
+      html += `<div class="space-y-1">`;
+      recent.forEach((r) => {
+        const when = new Date(r.created_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' });
+        const status = r.status || 'pending';
+        const tone = status === 'completed' || status === 'delivered'
+          ? 'bg-green-50 text-green-700'
+          : status === 'failed' || status === 'rejected' || status === 'cancelled'
+          ? 'bg-red-50 text-red-600'
+          : 'bg-blue-50 text-blue-600';
+        html += `<div class="flex items-center justify-between text-[11px] py-1">`;
+        html += `<span class="text-gray-500 w-14 flex-shrink-0">${when}</span>`;
+        html += `<span class="font-semibold flex-1 truncate mx-2">#${escapeHtml(r.order_number || '-')}</span>`;
+        html += `<span class="text-gray-400 truncate mr-2 hidden sm:inline">${(r.delivery_method || '').replace(/-/g, ' ')}</span>`;
+        html += `<span class="px-2 py-0.5 rounded-full font-semibold ${tone}">${escapeHtml(status)}</span>`;
+        html += `</div>`;
+      });
+      html += `</div></div>`;
+    }
+    html += `</div>`;
+  }
+
   // Progress
   html += `<div class="h-2 bg-gray-100 rounded-full mb-1 overflow-hidden"><div class="h-full rounded-full transition-all ${job.status==='completed'?'bg-green-400':job.status==='failed'?'bg-red-400':'bg-brand-400'}" style="width:${progress}%"></div></div>`;
   html += `<div class="text-[11px] text-gray-400 text-right mb-6">${currentIdx+1} / ${allStages.length} stages</div>`;

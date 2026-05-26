@@ -50,9 +50,72 @@ router.get('/jobs/:id', requirePermission('pipeline.view'), async (req: Authenti
   // Include the resulting order if one was created from this pipeline
   const order = await db('orders').where({ pipeline_job_id: jobId }).first();
 
+  // Customer history block — useful for trust calls when reviewing a job.
+  // Resolves the customer in two steps: first by orders.customer_id (the
+  // canonical FK once courierSubmitted runs upsertCustomer), then falls back
+  // to a phone lookup against customers.phone_normalized for early-stage
+  // jobs that haven't been linked yet.
+  let customerHistory: any = null;
+  if (order) {
+    let customer: any = null;
+    if (order.customer_id) {
+      customer = await db('customers')
+        .where({ id: order.customer_id, tenant_id: tenantId })
+        .first();
+    }
+    if (!customer && order.customer_phone) {
+      // Phone-normalize the way customers.upsertCustomer does — strip non-digits.
+      const phoneNormalized = String(order.customer_phone).replace(/\D/g, '');
+      if (phoneNormalized) {
+        customer = await db('customers')
+          .where({ tenant_id: tenantId, phone_normalized: phoneNormalized })
+          .first();
+      }
+    }
+
+    if (customer) {
+      const recentOrders = await db('orders')
+        .where({ customer_id: customer.id, tenant_id: tenantId })
+        .whereNot({ id: order.id })
+        .orderBy('created_at', 'desc')
+        .limit(5)
+        .select(
+          'id', 'order_number', 'status', 'courier_status',
+          'shopify_fulfillment_status', 'waybill', 'delivery_method', 'created_at',
+        );
+
+      // Aggregate counts so the UI can show a quick success-rate strip.
+      const aggregateRows = await db('orders')
+        .where({ customer_id: customer.id, tenant_id: tenantId })
+        .select('status')
+        .count<{ status: string; count: string }[]>('id as count')
+        .groupBy('status');
+      const totals: Record<string, number> = {};
+      aggregateRows.forEach((r: any) => { totals[r.status] = parseInt(r.count, 10) || 0; });
+      const total = Object.values(totals).reduce((a, b) => a + b, 0);
+
+      customerHistory = {
+        customer: {
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone_normalized,
+          email: customer.email,
+          order_count: customer.order_count,
+          first_order_at: customer.first_order_at,
+          last_order_at: customer.last_order_at,
+        },
+        totals: {
+          all: total,
+          by_status: totals,
+        },
+        recent_orders: recentOrders,
+      };
+    }
+  }
+
   return res.status(200).json({
     success: true,
-    data: { job, stages, order: order || null },
+    data: { job, stages, order: order || null, customer_history: customerHistory },
   });
 });
 
