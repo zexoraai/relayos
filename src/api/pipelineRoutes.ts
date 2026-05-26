@@ -21,7 +21,7 @@ router.get('/jobs', requirePermission('pipeline.view'), async (req: Authenticate
     .orderBy('created_at', 'desc')
     .limit(limit)
     .offset(offset)
-    .select('id', 'email_id', 'current_stage', 'status', 'correlation_id', 'last_error', 'retry_count', 'created_at', 'updated_at');
+    .select('id', 'email_id', 'current_stage', 'status', 'correlation_id', 'last_error', 'retry_count', 'created_at', 'updated_at', 'caretaker_verdict');
 
   const total = await db('pipeline_jobs').where({ tenant_id: tenantId }).count('id as count').first();
 

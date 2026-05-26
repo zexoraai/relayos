@@ -596,6 +596,16 @@ async function renderPipeline() {
         html += `<div class="absolute -left-[13px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${dotColor} ring-2 ring-white"></div>`;
         html += `<span class="text-[11px] text-gray-400 w-12 flex-shrink-0">${time}</span>`;
         html += `<div class="flex-1 min-w-0"><div class="text-xs font-medium capitalize truncate group-hover:text-brand-700">${stage}</div></div>`;
+        // Inline status hints so the row tells the operator what happened
+        // without forcing them to click into the detail panel:
+        // - approved-resuming: caretaker just approved, courier submission in flight
+        // - failed/rejected with last_error: show a short reason snippet
+        if (job.status === 'processing' && job.caretaker_verdict === 'approve') {
+          html += `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap mr-1">resuming</span>`;
+        } else if ((job.status === 'failed' || job.status === 'rejected') && job.last_error) {
+          const short = job.last_error.length > 36 ? job.last_error.slice(0, 36) + '…' : job.last_error;
+          html += `<span class="text-[10px] text-red-500 truncate max-w-[180px] mr-1" title="${escapeHtml(job.last_error)}">${escapeHtml(short)}</span>`;
+        }
         html += badge(job.status);
         html += `</div>`;
       });
@@ -613,7 +623,35 @@ async function renderPipeline() {
   html += `</div>`;
 
   document.getElementById('tab-content').innerHTML = html;
-  if (hasProcessing) { clearTimeout(window._pipelineTimer); window._pipelineTimer = setTimeout(() => { if (currentTab === 'pipeline') { const panel = document.getElementById('job-detail-panel'); const hasDetail = panel && !panel.innerHTML.includes('Select a job'); if (!hasDetail) renderPipeline(); } }, 4000); }
+
+  // Preserve the detail-panel view across auto-refresh polls. If the user
+  // had a job open when the previous render fired (window._activeJobId),
+  // re-render that detail panel from the fresh data so they watch their
+  // order go pending_review -> processing -> completed without losing
+  // their place.
+  if (window._activeJobId) {
+    const idx = pipelineJobs.findIndex((j) => j.id === window._activeJobId);
+    if (idx >= 0) {
+      // Avoid recursive re-entry when showJobDetail itself is the trigger.
+      Promise.resolve().then(() => showJobDetail(idx, { silent: true }));
+    } else {
+      // The job dropped out of the visible window (filter, date range).
+      // Don't blow away the panel — just leave the placeholder.
+      window._activeJobId = null;
+    }
+  }
+
+  // Poll while anything is in flight. Caretaker approval pushes a job from
+  // pending_review -> processing -> completed across ~5-15 seconds; if the
+  // user is sitting on this tab they should see the row transition without
+  // having to refresh manually. Stops automatically once nothing's moving.
+  const inFlight = pipelineJobs.some((j) => j.status === 'processing' || j.status === 'pending_review');
+  clearTimeout(window._pipelineTimer);
+  if (inFlight && currentTab === 'pipeline') {
+    window._pipelineTimer = setTimeout(() => {
+      if (currentTab === 'pipeline') renderPipeline();
+    }, 3000);
+  }
 }
 
 function setPipelineFilter(f) { window._pipelineFilter = f; renderPipeline(); }
@@ -665,11 +703,23 @@ function applyPipelineFilters(jobs, statusFilter, dateFrom, dateTo) {
   }
   return result;
 }
-async function showJobDetail(index) {
+async function showJobDetail(index, opts) {
   const job = pipelineJobs[index];
-  if (!job || !job.id) { toast('Job not found','error'); return; }
+  if (!job || !job.id) {
+    if (!opts || !opts.silent) toast('Job not found', 'error');
+    return;
+  }
+  // Track which job's detail panel is open so the auto-refresh poll above
+  // can rerender this panel in place each cycle (caretaker approval moves
+  // the job pending_review -> processing -> completed/failed in the
+  // background, and we want the operator to see those transitions land on
+  // the same screen they clicked Approve from).
+  window._activeJobId = job.id;
   const { data } = await api('GET', '/pipeline/jobs/' + job.id);
-  if (!data.success) { toast('Failed to load job details','error'); return; }
+  if (!data.success) {
+    if (!opts || !opts.silent) toast('Failed to load job details', 'error');
+    return;
+  }
   const stages = data.data.stages || [];
   const allStages = ['EMAIL RECEIVED','EMAIL NORMALIZED','DATA EXTRACTED','DATA VALIDATED','SHOPIFY ENRICHED','LOCATION RESOLVED','CUSTOMER DATA','LOCKERS RESOLVED','PAYLOAD CREATED','CARETAKER REVIEW','COURIER SUBMITTED'];
   const currentIdx = allStages.indexOf(job.current_stage.replace(/_/g,' '));
@@ -679,6 +729,18 @@ async function showJobDetail(index) {
   // Header
   html += `<div class="flex items-center justify-between mb-2"><h3 class="font-bold text-base">Pipeline Detail</h3><div class="flex items-center gap-2">${badge(job.status)}<button onclick="reprocessJob('${job.id}')" class="px-3 py-1.5 bg-surface-100 hover:bg-brand-100 text-gray-700 hover:text-gray-900 text-xs font-semibold rounded-full transition-all" title="Re-run pipeline (uses current settings — useful after fixing Shopify token, prompts, etc.)">Reprocess</button></div></div>`;
   html += `<div class="text-[11px] text-gray-400 mb-4">${new Date(job.created_at).toLocaleString()} - ${job.correlation_id||''}</div>`;
+
+  // Surface async failures and the resume status so a reviewer who just
+  // approved can see what happened next without leaving the panel.
+  if (job.status === 'processing' && job.caretaker_verdict === 'approve') {
+    html += `<div class="text-[11px] bg-blue-50 text-blue-600 rounded-xl px-3 py-2 mb-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot"></span>Resuming after caretaker approval — submitting to courier...</div>`;
+  }
+  if (job.status === 'failed' && job.last_error) {
+    html += `<div class="text-[11px] bg-red-50 text-red-600 rounded-xl px-3 py-2 mb-3"><span class="font-semibold">Failed:</span> ${escapeHtml(job.last_error)}</div>`;
+  }
+  if (job.status === 'rejected' && job.last_error) {
+    html += `<div class="text-[11px] bg-amber-50 text-amber-700 rounded-xl px-3 py-2 mb-3"><span class="font-semibold">Rejected:</span> ${escapeHtml(job.last_error)}</div>`;
+  }
 
   // Order summary (if the pipeline produced an order)
   const order = data.data.order;
