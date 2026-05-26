@@ -158,10 +158,20 @@ function _decorateMobileEnhancements(root) {
 function _installMobileEnhancementsObserver() {
   const root = document.getElementById('tab-content');
   if (!root) { setTimeout(_installMobileEnhancementsObserver, 250); return; }
-  // Whenever tab content swaps, re-decorate and reset detail-pane state so
-  // the mobile back button never appears stuck after a tab change.
+  // Track the last-known `currentTab` so we only clear `body.detail-open`
+  // on a real tab switch, NOT on routine in-tab re-renders (e.g. the
+  // pipeline poll every 3s). Without this, opening a pipeline detail and
+  // then waiting through one poll cycle would flash the list back over
+  // the detail because the observer would keep wiping `detail-open`.
+  let lastTab = currentTab;
   const tick = () => {
-    document.body.classList.remove('detail-open');
+    if (lastTab !== currentTab) {
+      document.body.classList.remove('detail-open');
+      // Forget any open job from the previous tab so its detail panel
+      // is not auto-restored on this new tab.
+      window._activeJobId = null;
+      lastTab = currentTab;
+    }
     _decorateMobileEnhancements(root);
   };
   tick();
@@ -615,11 +625,20 @@ async function renderPipeline() {
   }
   html += `</div></div>`;
 
-  // Right: Detail panel
+  // Right: Detail panel — show a subtle skeleton when a job was already
+  // open, so the brief gap between innerHTML reset and showJobDetail's
+  // async fetch doesn't flash the placeholder over the user's selection.
   html += `<div class="lg:col-span-2" id="job-detail-panel">`;
-  html += `<div class="bg-white rounded-3xl shadow-card p-8 flex items-center justify-center min-h-[400px]">`;
-  html += `<div class="text-center"><div class="text-3xl opacity-15 mb-3">&#9654;</div><p class="text-sm text-gray-400">Select a job to view its pipeline stages</p></div>`;
-  html += `</div></div>`;
+  if (window._activeJobId && pipelineJobs.some((j) => j.id === window._activeJobId)) {
+    html += `<div class="bg-white rounded-3xl shadow-card p-8 flex items-center justify-center min-h-[400px]">`;
+    html += `<div class="w-6 h-6 border-2 border-brand-400 border-t-transparent rounded-full animate-spin opacity-60"></div>`;
+    html += `</div>`;
+  } else {
+    html += `<div class="bg-white rounded-3xl shadow-card p-8 flex items-center justify-center min-h-[400px]">`;
+    html += `<div class="text-center"><div class="text-3xl opacity-15 mb-3">&#9654;</div><p class="text-sm text-gray-400">Select a job to view its pipeline stages</p></div>`;
+    html += `</div>`;
+  }
+  html += `</div>`;
   html += `</div>`;
 
   document.getElementById('tab-content').innerHTML = html;
