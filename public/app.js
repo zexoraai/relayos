@@ -1435,6 +1435,14 @@ async function openReviewModal(evaluationId) {
           </div>
           <textarea id="rv-notes" rows="2" placeholder="Why are you overriding? Saved for audit." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></textarea>
         </div>
+
+        <div class="flex items-start gap-2 px-1">
+          <input type="checkbox" id="rv-notify" class="mt-1">
+          <label for="rv-notify" class="text-xs text-gray-600 leading-relaxed cursor-pointer select-none">
+            <span class="font-semibold">Notify customer via WhatsApp</span>
+            <span class="block text-gray-400">Sends a brief confirmation message about the changes you made (address, phone, or method) before the parcel ships. Uses the <code class="bg-surface-100 px-1 rounded">order_details_updated</code> template.</span>
+          </label>
+        </div>
       </div>
 
       <div class="p-6 border-t border-gray-100 flex gap-2">
@@ -1490,10 +1498,12 @@ async function submitReview(evaluationId) {
   }
 
   const notes = (document.getElementById('rv-notes')?.value || '').trim();
+  const notifyCustomer = !!document.getElementById('rv-notify')?.checked;
 
   const body = { resolution: 'approved' };
   if (Object.keys(overrides).length) body.overrides = overrides;
   if (notes) body.notes = notes;
+  if (notifyCustomer) body.notify_customer = true;
 
   const { data } = await api('POST', `/caretaker/evaluations/${evaluationId}/resolve`, body);
   if (data?.success) {

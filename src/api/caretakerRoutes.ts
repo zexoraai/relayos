@@ -5,6 +5,7 @@ import { caretakerRulesBodySchema } from '../schemas/settings';
 import { getDb } from '../db/connection';
 import { resolveReview } from '../caretaker';
 import { processPipelineJob } from '../pipeline';
+import { dispatchByPurpose } from '../whatsapp';
 import { createChildLogger } from '../observability/logger';
 
 const log = createChildLogger({ module: 'caretaker-api' });
@@ -175,7 +176,7 @@ router.post('/evaluations/:id/resolve', requirePermission('caretaker.review.appr
   const tenantId = req.tenant!.tenantId;
   const userEmail = req.tenant!.email || 'unknown';
   const { id } = req.params as { id: string };
-  const { resolution, overrides, notes } = req.body || {};
+  const { resolution, overrides, notes, notify_customer } = req.body || {};
 
   if (!['approved', 'rejected'].includes(resolution)) {
     return res.status(400).json({
@@ -220,6 +221,52 @@ router.post('/evaluations/:id/resolve', requirePermission('caretaker.review.appr
         mailboxId: job.mailbox_id,
         correlationId: job.correlation_id,
       }).catch((err) => log.error({ jobId: job.id, err: err.message }, 'Resume pipeline failed'));
+    }
+
+    // Optional courtesy: notify the customer via WhatsApp template when the
+    // reviewer changed their address or phone, so the customer can confirm
+    // before the parcel ships. Default OFF — opt in per approve via the
+    // notify_customer flag in the request body. Address-change notifications
+    // are the most common use case (locker swap / suburb correction).
+    if (notify_customer && overrides && typeof overrides === 'object') {
+      const ov = overrides as Record<string, unknown>;
+      const changeBits: string[] = [];
+      if (ov.delivery_address && typeof ov.delivery_address === 'object') {
+        changeBits.push('updated delivery address');
+      }
+      if (typeof ov.customer_phone === 'string' && ov.customer_phone.trim()) {
+        changeBits.push('updated contact number');
+      }
+      if (typeof ov.delivery_method === 'string' && ov.delivery_method.trim()) {
+        changeBits.push(`switched to ${ov.delivery_method.replace(/-/g, ' ')}`);
+      }
+
+      if (changeBits.length) {
+        // Resolve the order so we know who to message and what order_number to cite.
+        // Caretaker may run before COURIER_SUBMITTED has created the order, so this
+        // is best-effort: if there's no order yet, we skip silently.
+        const order = await db('orders').where({ pipeline_job_id: ev.pipeline_job_id, tenant_id: tenantId }).first();
+        if (order && (order.customer_phone || (typeof ov.customer_phone === 'string' && ov.customer_phone))) {
+          const targetPhone = (typeof ov.customer_phone === 'string' && ov.customer_phone.trim()) || order.customer_phone;
+          const summary = changeBits.join(', ');
+          // Capitalize the first character so the rendered message reads cleanly.
+          const change_summary = summary.charAt(0).toUpperCase() + summary.slice(1) + '.';
+
+          dispatchByPurpose({
+            tenantId,
+            purpose: 'order_details_updated',
+            toPhone: targetPhone,
+            variables: {
+              customer_name: order.customer_name || 'there',
+              order_number: order.order_number || '',
+              change_summary,
+            },
+            orderId: order.id,
+          }).catch((err: any) => log.warn({ orderId: order.id, err: err.message }, 'order_details_updated WhatsApp send failed'));
+
+          log.info({ orderId: order.id, changes: changeBits }, 'Reviewer override — customer notified via WhatsApp');
+        }
+      }
     }
   } else {
     await db('pipeline_jobs').where({ id: ev.pipeline_job_id }).update({

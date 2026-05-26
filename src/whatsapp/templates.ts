@@ -62,4 +62,11 @@ export const DEFAULT_TEMPLATES: Array<{
       'Hi {{customer_name}}, we received order #{{order_number}} but need to verify a few details before dispatch. Our team will reach out shortly.',
     variables: ['customer_name', 'order_number'],
   },
+  {
+    purpose: 'order_details_updated',
+    language_code: 'en',
+    body_text:
+      'Hi {{customer_name}}, we updated the delivery details for your order #{{order_number}}. {{change_summary}} If anything looks wrong, please reply to this message.',
+    variables: ['customer_name', 'order_number', 'change_summary'],
+  },
 ];
