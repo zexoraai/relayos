@@ -510,6 +510,103 @@ function emptyState(title, desc, btnText, btnAction) {
 
 // ---- Pipeline ----
 
+/**
+ * Build the inner HTML for the timeline (left column) only. Used by both the
+ * initial full render and the in-place poll refresh — keeping the detail
+ * panel DOM untouched between cycles avoids the "select a row, watch it
+ * blink every 3s" issue.
+ */
+function _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo) {
+  const filteredJobs = applyPipelineFilters(pipelineJobs, activeFilter, dateFrom, dateTo);
+  if (filteredJobs.length === 0) {
+    return emptyState('No jobs match', 'Try a different filter.');
+  }
+  const fGrouped = {};
+  filteredJobs.forEach((j) => {
+    const d = new Date(j.created_at);
+    const key = d.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
+    if (!fGrouped[key]) fGrouped[key] = [];
+    fGrouped[key].push(j);
+  });
+  let html = `<div class="space-y-4 max-h-[600px] overflow-y-auto pr-1">`;
+  Object.entries(fGrouped).forEach(([dateLabel, jobs]) => {
+    html += `<div>`;
+    html += `<div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 sticky top-0 bg-white py-1">${dateLabel}</div>`;
+    html += `<div class="space-y-1.5 relative pl-4 border-l-2 border-gray-100">`;
+    jobs.forEach((job) => {
+      const globalIdx = pipelineJobs.indexOf(job);
+      const time = new Date(job.created_at).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' });
+      const stage = job.current_stage.replace(/_/g, ' ').toLowerCase();
+      const dotColor = job.status === 'completed' ? 'bg-green-400'
+        : job.status === 'failed' || job.status === 'rejected' ? 'bg-red-400'
+        : job.status === 'processing' ? 'bg-blue-400 pulse-dot'
+        : 'bg-gray-300';
+      const isActive = window._activeJobId === job.id;
+      html += `<div onclick="showJobDetail(${globalIdx})" data-job-id="${job.id}" class="relative flex items-center gap-3 p-2.5 rounded-xl ${isActive ? 'bg-brand-50/60 ring-1 ring-brand-300' : 'hover:bg-brand-50/40'} cursor-pointer transition-all group">`;
+      html += `<div class="absolute -left-[13px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${dotColor} ring-2 ring-white"></div>`;
+      html += `<span class="text-[11px] text-gray-400 w-12 flex-shrink-0">${time}</span>`;
+      html += `<div class="flex-1 min-w-0"><div class="text-xs font-medium capitalize truncate group-hover:text-brand-700">${stage}</div></div>`;
+      if (job.status === 'processing' && job.caretaker_verdict === 'approve') {
+        html += `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap mr-1">resuming</span>`;
+      } else if ((job.status === 'failed' || job.status === 'rejected') && job.last_error) {
+        const short = job.last_error.length > 36 ? job.last_error.slice(0, 36) + '…' : job.last_error;
+        html += `<span class="text-[10px] text-red-500 truncate max-w-[180px] mr-1" title="${escapeHtml(job.last_error)}">${escapeHtml(short)}</span>`;
+      }
+      html += badge(job.status);
+      html += `</div>`;
+    });
+    html += `</div></div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+/**
+ * Lightweight poll: refresh `pipelineJobs` and update the list column in
+ * place without touching the detail panel. If the open job's status or
+ * stages may have changed (status moved or current_stage changed), refresh
+ * the panel; otherwise leave it alone so the operator's view doesn't blink.
+ */
+async function _pollPipeline() {
+  if (currentTab !== 'pipeline') return;
+  const { data } = await api('GET', '/pipeline/jobs?limit=30');
+  if (!data.success) return; // Quietly skip; the next tick will retry.
+  const prevJobs = pipelineJobs;
+  pipelineJobs = data.data.jobs;
+
+  // Update the timeline column in place.
+  const timeline = document.getElementById('pipeline-timeline');
+  if (timeline) {
+    const activeFilter = window._pipelineFilter || 'all';
+    const dateFrom = window._pipelineDateFrom || '';
+    const dateTo = window._pipelineDateTo || '';
+    timeline.innerHTML = _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo);
+  }
+
+  // Refresh the detail panel ONLY when the underlying job's status or
+  // current_stage changed since the previous poll. Without this guard the
+  // panel re-renders every 3 seconds even when nothing moved, which is
+  // exactly the blink the operator was seeing.
+  if (window._activeJobId) {
+    const idx = pipelineJobs.findIndex((j) => j.id === window._activeJobId);
+    const prev = prevJobs.find((j) => j.id === window._activeJobId);
+    const next = idx >= 0 ? pipelineJobs[idx] : null;
+    const moved = !!(prev && next && (prev.status !== next.status || prev.current_stage !== next.current_stage));
+    if (moved && idx >= 0) {
+      showJobDetail(idx, { silent: true });
+    }
+    // If the job dropped off the visible list (filter, date range, etc.),
+    // leave the panel as-is — don't blow it away mid-action.
+  }
+
+  // Schedule next tick.
+  const inFlight = pipelineJobs.some((j) => j.status === 'processing' || j.status === 'pending_review');
+  clearTimeout(window._pipelineTimer);
+  if (inFlight && currentTab === 'pipeline') {
+    window._pipelineTimer = setTimeout(_pollPipeline, 3000);
+  }
+}
+
 async function renderPipeline() {
   const { data } = await api('GET', '/pipeline/jobs?limit=30');
   if (!data.success) { document.getElementById('tab-content').innerHTML = emptyState('Failed to load','Check your connection.'); return; }
@@ -578,51 +675,12 @@ async function renderPipeline() {
   // Left: Calendar-style grouped list
   html += `<div class="lg:col-span-1"><div class="bg-white rounded-3xl shadow-card p-5">`;
   html += `<h3 class="font-bold text-sm mb-4">Timeline</h3>`;
-
-  const filteredJobs = applyPipelineFilters(pipelineJobs, activeFilter, dateFrom, dateTo);
-  if (filteredJobs.length === 0) {
-    html += emptyState('No jobs match','Try a different filter.');
-  } else {
-    // Re-group filtered
-    const fGrouped = {};
-    filteredJobs.forEach(j => {
-      const d = new Date(j.created_at);
-      const key = d.toLocaleDateString('en-ZA', { weekday: 'short', day: 'numeric', month: 'short' });
-      if (!fGrouped[key]) fGrouped[key] = [];
-      fGrouped[key].push(j);
-    });
-
-    html += `<div class="space-y-4 max-h-[600px] overflow-y-auto pr-1">`;
-    Object.entries(fGrouped).forEach(([dateLabel, jobs]) => {
-      html += `<div>`;
-      html += `<div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 sticky top-0 bg-white py-1">${dateLabel}</div>`;
-      html += `<div class="space-y-1.5 relative pl-4 border-l-2 border-gray-100">`;
-      jobs.forEach((job, i) => {
-        const globalIdx = pipelineJobs.indexOf(job);
-        const time = new Date(job.created_at).toLocaleTimeString('en-ZA', { hour:'2-digit', minute:'2-digit' });
-        const stage = job.current_stage.replace(/_/g,' ').toLowerCase();
-        const dotColor = job.status==='completed'?'bg-green-400':job.status==='failed'||job.status==='rejected'?'bg-red-400':job.status==='processing'?'bg-blue-400 pulse-dot':'bg-gray-300';
-        html += `<div onclick="showJobDetail(${globalIdx})" class="relative flex items-center gap-3 p-2.5 rounded-xl hover:bg-brand-50/40 cursor-pointer transition-all group">`;
-        html += `<div class="absolute -left-[13px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${dotColor} ring-2 ring-white"></div>`;
-        html += `<span class="text-[11px] text-gray-400 w-12 flex-shrink-0">${time}</span>`;
-        html += `<div class="flex-1 min-w-0"><div class="text-xs font-medium capitalize truncate group-hover:text-brand-700">${stage}</div></div>`;
-        // Inline status hints so the row tells the operator what happened
-        // without forcing them to click into the detail panel:
-        // - approved-resuming: caretaker just approved, courier submission in flight
-        // - failed/rejected with last_error: show a short reason snippet
-        if (job.status === 'processing' && job.caretaker_verdict === 'approve') {
-          html += `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap mr-1">resuming</span>`;
-        } else if ((job.status === 'failed' || job.status === 'rejected') && job.last_error) {
-          const short = job.last_error.length > 36 ? job.last_error.slice(0, 36) + '…' : job.last_error;
-          html += `<span class="text-[10px] text-red-500 truncate max-w-[180px] mr-1" title="${escapeHtml(job.last_error)}">${escapeHtml(short)}</span>`;
-        }
-        html += badge(job.status);
-        html += `</div>`;
-      });
-      html += `</div></div>`;
-    });
-    html += `</div>`;
-  }
+  // Wrap the timeline body in a stable container so the lightweight
+  // _pollPipeline() can update only its innerHTML without disturbing
+  // the right-hand detail panel.
+  html += `<div id="pipeline-timeline">`;
+  html += _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo);
+  html += `</div>`;
   html += `</div></div>`;
 
   // Right: Detail panel — show a subtle skeleton when a job was already
@@ -643,33 +701,27 @@ async function renderPipeline() {
 
   document.getElementById('tab-content').innerHTML = html;
 
-  // Preserve the detail-panel view across auto-refresh polls. If the user
-  // had a job open when the previous render fired (window._activeJobId),
-  // re-render that detail panel from the fresh data so they watch their
-  // order go pending_review -> processing -> completed without losing
-  // their place.
+  // If a job was already open before this re-render (e.g. the user clicked a
+  // row, then changed a filter), restore its detail view in place. We only
+  // do this when the panel is currently the placeholder/skeleton — never
+  // during routine 3s polls. The poll loop below uses _pollPipeline(),
+  // which leaves the panel alone unless the underlying job actually moved.
   if (window._activeJobId) {
     const idx = pipelineJobs.findIndex((j) => j.id === window._activeJobId);
     if (idx >= 0) {
-      // Avoid recursive re-entry when showJobDetail itself is the trigger.
-      Promise.resolve().then(() => showJobDetail(idx, { silent: true }));
-    } else {
-      // The job dropped out of the visible window (filter, date range).
-      // Don't blow away the panel — just leave the placeholder.
-      window._activeJobId = null;
+      const panel = document.getElementById('job-detail-panel');
+      const isSkeleton = panel && (panel.querySelector('.animate-spin') || panel.textContent.includes('Select a job'));
+      if (isSkeleton) {
+        Promise.resolve().then(() => showJobDetail(idx, { silent: true }));
+      }
     }
   }
 
-  // Poll while anything is in flight. Caretaker approval pushes a job from
-  // pending_review -> processing -> completed across ~5-15 seconds; if the
-  // user is sitting on this tab they should see the row transition without
-  // having to refresh manually. Stops automatically once nothing's moving.
+  // Schedule the lightweight poll only if anything is actually moving.
   const inFlight = pipelineJobs.some((j) => j.status === 'processing' || j.status === 'pending_review');
   clearTimeout(window._pipelineTimer);
   if (inFlight && currentTab === 'pipeline') {
-    window._pipelineTimer = setTimeout(() => {
-      if (currentTab === 'pipeline') renderPipeline();
-    }, 3000);
+    window._pipelineTimer = setTimeout(_pollPipeline, 3000);
   }
 }
 
