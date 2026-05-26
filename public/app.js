@@ -3054,40 +3054,119 @@ async function deleteStep(campaignId, stepId) {
 
 // ---- Manual Upload Queue ----
 
+/**
+ * Classify a manual_upload_reason string into a stable origin key + a
+ * UI-friendly label / tone. Lets the queue tell the operator *why* an
+ * order landed here at a glance, instead of forcing them to read every
+ * reason string.
+ *
+ * Detection is substring-based on lowercased text — these reasons are
+ * authored by the pipeline (see src/pipeline/index.ts divertToManualQueue
+ * and the legacy collection-method branch) so the keywords are stable.
+ */
+function _classifyManualReason(reason) {
+  const r = (reason || '').toLowerCase();
+  if (r.includes('no eligible pudo locker') || r.includes('no eligible locker') || r.includes('no locker within')) {
+    return { key: 'no_locker', label: 'No locker', tone: 'red', hint: 'No PUDO locker in range — ship via kiosk, alt courier, or contact customer' };
+  }
+  if (r.includes('collection order') || r.includes('customer picks up')) {
+    return { key: 'collection', label: 'Collection', tone: 'indigo', hint: 'Customer collecting — wait for pickup, then mark complete' };
+  }
+  if (r.includes('caretaker')) {
+    return { key: 'caretaker', label: 'Caretaker', tone: 'amber', hint: 'Pipeline flagged this; review the reason and decide' };
+  }
+  if (r.includes('manual')) {
+    return { key: 'manual', label: 'Manual', tone: 'gray', hint: 'Manually uploaded order — process and provide waybill' };
+  }
+  return { key: 'other', label: 'Other', tone: 'gray', hint: '' };
+}
+
+const MANUAL_TONE_CLASSES = {
+  red:    { bg: 'bg-red-50',    text: 'text-red-600',    ring: 'border-red-200',    pill: 'bg-red-100 text-red-700' },
+  amber:  { bg: 'bg-amber-50',  text: 'text-amber-700',  ring: 'border-amber-200',  pill: 'bg-amber-100 text-amber-800' },
+  indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'border-indigo-200', pill: 'bg-indigo-100 text-indigo-700' },
+  gray:   { bg: 'bg-gray-50',   text: 'text-gray-700',   ring: 'border-gray-200',   pill: 'bg-gray-100 text-gray-700' },
+};
+
 async function renderManualUpload() {
   const status = window._manualFilter || 'pending';
+  const originFilter = window._manualOriginFilter || 'all';
   const { data } = await api('GET', `/manual/upload-queue?status=${status}`);
   if (!data.success) { document.getElementById('tab-content').innerHTML = emptyState('Failed to load',''); return; }
-  const orders = data.data.orders;
+  const allOrders = data.data.orders;
   const counts = data.data.counts;
 
+  // Classify once so we can compute origin counts and reuse below.
+  const classified = allOrders.map((o) => ({ o, origin: _classifyManualReason(o.manual_upload_reason) }));
+  const originCounts = classified.reduce((acc, x) => { acc[x.origin.key] = (acc[x.origin.key] || 0) + 1; return acc; }, {});
+
+  // Apply the origin filter for display.
+  const orders = originFilter === 'all'
+    ? classified
+    : classified.filter((x) => x.origin.key === originFilter);
+
   let html = '';
-  html += `<div class="flex items-center gap-2 mb-6">`;
+  // Status filter chips
+  html += `<div class="flex items-center gap-2 mb-3">`;
   html += `<button onclick="window._manualFilter='pending';renderManualUpload()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${status==='pending'?'bg-brand-400 text-gray-900':'bg-white text-gray-500 border border-gray-200'}">Pending (${counts.pending})</button>`;
   html += `<button onclick="window._manualFilter='completed';renderManualUpload()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${status==='completed'?'bg-brand-400 text-gray-900':'bg-white text-gray-500 border border-gray-200'}">Completed (${counts.completed})</button>`;
   html += `</div>`;
+
+  // Origin filter chips — one chip per origin that has at least one order
+  // in the current status view. "All" is always shown so the user can clear
+  // the filter without typing.
+  const originOrder = ['no_locker', 'caretaker', 'collection', 'manual', 'other'];
+  const visibleOrigins = originOrder.filter((k) => originCounts[k]);
+  if (visibleOrigins.length > 0) {
+    html += `<div class="flex items-center gap-2 mb-6 flex-wrap">`;
+    html += `<span class="text-xs text-gray-400 font-semibold uppercase tracking-wide mr-1">Origin:</span>`;
+    html += `<button onclick="window._manualOriginFilter='all';renderManualUpload()" class="px-3 py-1 rounded-full text-[11px] font-semibold transition-all ${originFilter==='all'?'bg-gray-900 text-white':'bg-white text-gray-500 border border-gray-200'}">All (${classified.length})</button>`;
+    for (const key of visibleOrigins) {
+      const sample = classified.find((x) => x.origin.key === key).origin;
+      const cls = MANUAL_TONE_CLASSES[sample.tone] || MANUAL_TONE_CLASSES.gray;
+      const isActive = originFilter === key;
+      html += `<button onclick="window._manualOriginFilter='${key}';renderManualUpload()" class="px-3 py-1 rounded-full text-[11px] font-semibold transition-all ${isActive ? cls.pill : 'bg-white text-gray-500 border border-gray-200'}">${escapeHtml(sample.label)} (${originCounts[key]})</button>`;
+    }
+    html += `</div>`;
+  } else {
+    html += `<div class="mb-6"></div>`;
+  }
 
   if (orders.length === 0) {
     html += `<div class="bg-white rounded-3xl shadow-card p-6">${emptyState('No orders in manual queue', status === 'pending' ? 'Orders that need manual courier upload will appear here.' : 'No completed manual uploads yet.')}</div>`;
   } else {
     html += `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">`;
-    orders.forEach(o => {
+    orders.forEach(({ o, origin }) => {
+      const tone = MANUAL_TONE_CLASSES[origin.tone] || MANUAL_TONE_CLASSES.gray;
       let address = '';
       try { const a = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : (o.delivery_address||{}); address = a.entered_address || ''; } catch {}
       let lineItems = [];
       try { lineItems = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : (o.line_items||[]); } catch {}
       const time = new Date(o.created_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
 
-      html += `<div class="bg-white rounded-3xl shadow-card border border-amber-200 p-6">`;
-      html += `<div class="flex items-start justify-between mb-3"><div><div class="text-xl font-bold">Order #${o.order_number||'-'}</div><div class="text-xs text-gray-400">${time}</div></div>`;
-      html += `<span class="px-3 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">${o.waybill ? 'UPLOADED' : 'NEEDS UPLOAD'}</span></div>`;
+      // The card's left border colour tracks the origin so the queue is scannable.
+      html += `<div class="bg-white rounded-3xl shadow-card border-l-4 ${tone.ring.replace('border-', 'border-l-')} border-y border-r border-gray-100 p-6">`;
+      html += `<div class="flex items-start justify-between mb-3 gap-2"><div class="min-w-0"><div class="text-xl font-bold truncate">Order #${o.order_number||'-'}</div><div class="text-xs text-gray-400">${time}</div></div>`;
+      html += `<div class="flex flex-col items-end gap-1 flex-shrink-0">`;
+      html += `<span class="px-3 py-1 rounded-full text-[10px] font-bold ${o.waybill ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'}">${o.waybill ? 'UPLOADED' : 'NEEDS UPLOAD'}</span>`;
+      html += `<span class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${tone.pill}">${escapeHtml(origin.label)}</span>`;
+      html += `</div></div>`;
       html += `<div class="font-bold">${escapeHtml(o.customer_name||'')}</div>`;
       html += `<div class="text-sm text-gray-500">${escapeHtml(o.customer_phone||'')}</div>`;
       if (address) html += `<div class="text-sm text-gray-600 mt-2">${escapeHtml(address)}</div>`;
       if (lineItems.length) { html += `<div class="mt-2 text-sm"><strong>Items:</strong> ${lineItems.map(li=>escapeHtml(li.name)+' x '+li.quantity).join(', ')}</div>`; }
-      if (o.manual_upload_reason) html += `<div class="text-xs text-amber-600 mt-2">${escapeHtml(o.manual_upload_reason)}</div>`;
+
+      // Origin reason + hint, color-keyed to the origin so the queue is
+      // distinguishable at a glance.
+      if (o.manual_upload_reason || origin.hint) {
+        html += `<div class="${tone.bg} ${tone.text} rounded-xl px-3 py-2 mt-3 text-[11px] leading-relaxed">`;
+        if (o.manual_upload_reason) html += `<div>${escapeHtml(o.manual_upload_reason)}</div>`;
+        if (origin.hint) html += `<div class="opacity-80 mt-0.5">${escapeHtml(origin.hint)}</div>`;
+        html += `</div>`;
+      }
+
       if (o.waybill) {
-        html += `<div class="mt-3 p-3 bg-green-50 rounded-xl text-sm"><strong>Waybill:</strong> ${o.waybill} <strong>PIN:</strong> ${o.pincode||'-'}</div>`;
+        html += `<div class="mt-3 p-3 bg-green-50 rounded-xl text-sm"><strong>Waybill:</strong> ${escapeHtml(o.waybill)} <strong>PIN:</strong> ${escapeHtml(o.pincode||'-')}</div>`;
       } else {
         html += `<div class="mt-4 space-y-2">`;
         html += `<input id="mu-waybill-${o.id}" placeholder="Waybill (e.g. LD-XXXXX)" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
