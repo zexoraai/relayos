@@ -1111,12 +1111,49 @@ async function renderCaretaker() {
   html += `<div class="lg:col-span-2 bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Evaluations</h3>`;
   if (evals.length === 0) { html += `<p class="text-sm text-gray-400">No evaluations yet</p>`; }
   else {
-    html += `<div class="space-y-2 max-h-[500px] overflow-y-auto">`;
+    html += `<div class="space-y-2 max-h-[500px] overflow-y-auto" id="caretaker-eval-list">`;
     evals.forEach(e => {
       const flags = Array.isArray(e.flags)?e.flags:(e.flags||[]);
-      html += `<div class="p-3 rounded-2xl border border-gray-100">`;
-      html += `<div class="flex items-center justify-between mb-1"><span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>${badge(e.verdict==='approve'?'completed':e.verdict==='review'?'pending_review':'failed', e.verdict)}</div>`;
+
+      // After approval, the underlying pipeline_job moves processing -> completed/failed.
+      // Surface that state here so the reviewer doesn't have to flip to the
+      // Pipeline tab to see what happened next.
+      let postResolutionPill = '';
+      if (e.resolution === 'approved') {
+        if (e.pipeline_status === 'processing' && e.pipeline_caretaker_verdict === 'approve') {
+          postResolutionPill = `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap"><span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot mr-1 align-middle"></span>resuming</span>`;
+        } else if (e.pipeline_status === 'completed' && (e.order_waybill || e.order_status === 'submitted' || e.order_status === 'completed' || e.order_status === 'delivered')) {
+          postResolutionPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">submitted${e.order_waybill ? ' &middot; ' + escapeHtml(e.order_waybill) : ''}</span>`;
+        } else if (e.pipeline_status === 'failed') {
+          postResolutionPill = `<span class="text-[10px] text-red-600 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="${escapeHtml(e.pipeline_last_error || '')}">submit failed</span>`;
+        } else if (e.pipeline_status === 'rejected') {
+          postResolutionPill = `<span class="text-[10px] text-red-500 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">rejected by pipeline</span>`;
+        }
+      }
+
+      html += `<div class="p-3 rounded-2xl border border-gray-100" data-eval-id="${e.id}">`;
+      // Header: timestamp + order ref + verdict badge + post-resolution pill
+      html += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
+      html += `<div class="flex items-center gap-2 min-w-0">`;
+      html += `<span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>`;
+      if (e.order_number) {
+        html += `<span class="text-[11px] text-gray-700 font-semibold truncate">#${escapeHtml(e.order_number)}${e.customer_name ? ' &middot; ' + escapeHtml(e.customer_name) : ''}</span>`;
+      }
+      html += `</div>`;
+      html += `<div class="flex items-center gap-2">`;
+      html += postResolutionPill;
+      html += badge(e.verdict==='approve'?'completed':e.verdict==='review'?'pending_review':'failed', e.verdict);
+      html += `</div></div>`;
+
       html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary||'-')}</div>`;
+
+      // If the resumed pipeline failed, surface the reason inline so the
+      // reviewer can decide whether to reopen (vs. flipping to Pipeline tab).
+      if (e.resolution === 'approved' && e.pipeline_status === 'failed' && e.pipeline_last_error) {
+        const short = e.pipeline_last_error.length > 200 ? e.pipeline_last_error.slice(0, 200) + '…' : e.pipeline_last_error;
+        html += `<div class="text-[11px] text-red-600 bg-red-50 rounded-lg px-2.5 py-1.5 mt-2"><span class="font-semibold">After submit:</span> ${escapeHtml(short)}</div>`;
+      }
+
       let actions = '';
       if (e.verdict==='review' && !e.resolution) {
         actions = `<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
@@ -1124,14 +1161,30 @@ async function renderCaretaker() {
         actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen for review</button>`;
       } else if (e.verdict==='approve' && !e.resolution) {
         actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-gray-50 text-gray-600 rounded-full text-xs font-semibold hover:bg-gray-100" title="Convert to pending review">Reopen</button>`;
+      } else if (e.resolution === 'approved' && e.pipeline_status === 'failed') {
+        // Approved but the pipeline submit failed — let the reviewer reopen
+        // so they can edit and re-approve without going back to Pipeline.
+        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen &amp; edit</button>`;
       }
-      if (actions) html += `<div class="flex gap-2 mt-2">${actions}</div>`;
+      if (actions) html += `<div class="flex gap-2 mt-2 flex-wrap">${actions}</div>`;
       html += `</div>`;
     });
     html += `</div>`;
   }
   html += `</div></div>`;
   document.getElementById('tab-content').innerHTML = html;
+
+  // Auto-refresh while any evaluation has a still-moving pipeline job
+  // (resuming) so the operator sees the resume → submitted/failed transition
+  // land here, on the same tab they clicked Approve from. Stops once
+  // nothing is in flight.
+  const inFlight = evals.some((e) => e.resolution === 'approved' && (e.pipeline_status === 'processing' || e.pipeline_status === 'pending_review'));
+  clearTimeout(window._caretakerTimer);
+  if (inFlight && currentTab === 'caretaker') {
+    window._caretakerTimer = setTimeout(() => {
+      if (currentTab === 'caretaker') renderCaretaker();
+    }, 3000);
+  }
 }
 async function saveCaretakerRules() {
   const body = { mode:document.getElementById('ck-mode').value, max_distance_km:parseInt(document.getElementById('ck-max-dist').value)||null, enabled:document.getElementById('ck-enabled').checked, llm_enabled:document.getElementById('ck-llm').checked, require_phone:document.getElementById('ck-phone').checked, require_customer_name:document.getElementById('ck-name').checked, require_line_items:document.getElementById('ck-items').checked, block_duplicate_order_number:document.getElementById('ck-dup').checked };

@@ -58,11 +58,21 @@ router.get('/evaluations', requirePermission('caretaker.view'), async (req: Auth
 
   let q = db('caretaker_evaluations as ce')
     .leftJoin('pipeline_jobs as pj', 'pj.id', 'ce.pipeline_job_id')
+    .leftJoin('orders as o', 'o.pipeline_job_id', 'pj.id')
     .where('ce.tenant_id', tenantId)
     .select(
       'ce.id', 'ce.verdict', 'ce.mode', 'ce.flags', 'ce.checks',
       'ce.summary', 'ce.resolution', 'ce.resolved_by', 'ce.resolved_at', 'ce.created_at',
-      'ce.pipeline_job_id', 'pj.status as pipeline_status', 'pj.current_stage', 'pj.email_id',
+      'ce.pipeline_job_id',
+      'pj.status as pipeline_status',
+      'pj.current_stage',
+      'pj.email_id',
+      'pj.caretaker_verdict as pipeline_caretaker_verdict',
+      'pj.last_error as pipeline_last_error',
+      'o.order_number as order_number',
+      'o.customer_name as customer_name',
+      'o.waybill as order_waybill',
+      'o.status as order_status',
     )
     .orderBy('ce.created_at', 'desc')
     .limit(parseInt(limit as string, 10));
