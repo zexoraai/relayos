@@ -1213,7 +1213,26 @@ async function renderCaretaker() {
       html += `</div>`;
       html += `<div class="flex items-center gap-2">`;
       html += postResolutionPill;
-      html += badge(e.verdict==='approve'?'completed':e.verdict==='review'?'pending_review':'failed', e.verdict);
+      // Badge reflects the *current* state of the evaluation, not the
+      // original system verdict. Once a reviewer has resolved it,
+      // `resolution` wins; otherwise fall back to the system verdict.
+      // This keeps the amber "review" pill scoped to items that still
+      // need attention.
+      let badgeStatus, badgeText;
+      if (e.resolution === 'approved') {
+        badgeStatus = 'completed'; badgeText = 'approved';
+      } else if (e.resolution === 'rejected') {
+        badgeStatus = 'failed'; badgeText = 'rejected';
+      } else if (e.verdict === 'review') {
+        badgeStatus = 'pending_review'; badgeText = 'review';
+      } else if (e.verdict === 'approve') {
+        badgeStatus = 'completed'; badgeText = 'auto-approved';
+      } else if (e.verdict === 'reject') {
+        badgeStatus = 'failed'; badgeText = 'auto-rejected';
+      } else {
+        badgeStatus = 'failed'; badgeText = e.verdict || 'unknown';
+      }
+      html += badge(badgeStatus, badgeText);
       html += `</div></div>`;
 
       html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary||'-')}</div>`;
