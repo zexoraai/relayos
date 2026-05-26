@@ -1275,6 +1275,55 @@ async function reopenCk(id) {
   }
 }
 
+/**
+ * Reviewer-notes shorthand: store and recall the operator's most recently
+ * used override reasons. Per-browser via localStorage so each operator gets
+ * their own list. Capped at 8 entries; new entries promote to the top; case
+ * and whitespace are normalized so "Wrong locker" and "wrong locker " collapse
+ * to one chip.
+ *
+ * Storage shape: a JSON-encoded array of { text, lastUsed (ISO) } sorted
+ * newest-first. We could pull from caretaker_evaluations.reviewer_notes
+ * server-side too but the local list is fast, private, and survives across
+ * tabs without a server roundtrip.
+ */
+const REVIEW_NOTES_KEY = 'relayos.review.recent_notes';
+const REVIEW_NOTES_MAX = 8;
+
+function _loadRecentReviewNotes() {
+  try {
+    const raw = localStorage.getItem(REVIEW_NOTES_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function _saveRecentReviewNote(text) {
+  const trimmed = (text || '').trim();
+  if (!trimmed || trimmed.length < 2) return; // ignore noise
+  const current = _loadRecentReviewNotes();
+  // Dedupe case-insensitively.
+  const norm = trimmed.toLowerCase();
+  const filtered = current.filter((e) => (e.text || '').toLowerCase() !== norm);
+  filtered.unshift({ text: trimmed, lastUsed: new Date().toISOString() });
+  const capped = filtered.slice(0, REVIEW_NOTES_MAX);
+  try {
+    localStorage.setItem(REVIEW_NOTES_KEY, JSON.stringify(capped));
+  } catch {
+    // localStorage might be full or disabled — don't break the approve flow.
+  }
+}
+
+/** Apply a quick-pick reason to the rv-notes textarea. */
+function applyReviewNote(text) {
+  const el = document.getElementById('rv-notes');
+  if (!el) return;
+  el.value = text;
+  el.focus();
+}
+
 async function openReviewModal(evaluationId) {
   // Fetch snapshot of pipeline data + flags so the reviewer can edit before approving.
   const { data } = await api('GET', `/caretaker/evaluations/${evaluationId}`);
@@ -1371,7 +1420,19 @@ async function openReviewModal(evaluationId) {
         </div>
 
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Reviewer notes (optional)</label>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs text-gray-400">Reviewer notes (optional)</label>
+            ${(() => {
+              const recent = _loadRecentReviewNotes();
+              if (!recent.length) return '';
+              const chips = recent.map((r) => {
+                const safeText = escapeHtml(r.text);
+                const escAttr = r.text.replace(/'/g, "\\'");
+                return `<button type="button" onclick="applyReviewNote('${escAttr}')" class="px-2.5 py-0.5 bg-surface-100 hover:bg-brand-100 text-gray-700 text-[11px] rounded-full whitespace-nowrap" title="${safeText}">${safeText.length > 28 ? safeText.slice(0, 28) + '…' : safeText}</button>`;
+              }).join('');
+              return `<div class="flex flex-wrap gap-1 max-w-[70%] justify-end">${chips}</div>`;
+            })()}
+          </div>
           <textarea id="rv-notes" rows="2" placeholder="Why are you overriding? Saved for audit." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></textarea>
         </div>
       </div>
@@ -1436,6 +1497,8 @@ async function submitReview(evaluationId) {
 
   const { data } = await api('POST', `/caretaker/evaluations/${evaluationId}/resolve`, body);
   if (data?.success) {
+    // Stash the note so it shows up as a quick-pick chip next time.
+    if (notes) _saveRecentReviewNote(notes);
     toast('Approved — pipeline resuming with your edits', 'success');
     closeReviewModal();
     setTimeout(() => renderCaretaker(), 800);
