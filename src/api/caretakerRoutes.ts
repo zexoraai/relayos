@@ -118,6 +118,33 @@ router.get('/evaluations/:id', requirePermission('caretaker.view'), async (req: 
   const lockersResolved = parse(findStage('LOCKERS_RESOLVED')?.output_data);
   const dataExtracted = parse(findStage('DATA_EXTRACTED')?.output_data);
 
+  // Reviewer context: what's the underlying pipeline job actually doing,
+  // is the order already in a queue, and what other evaluations exist on
+  // this same job so the reviewer can spot patterns ("this is the third
+  // time we've reviewed this order"). All optional — the modal still works
+  // without these.
+  const pipelineJob = await db('pipeline_jobs')
+    .where({ id: ev.pipeline_job_id, tenant_id: tenantId })
+    .first('id', 'status', 'current_stage', 'last_error', 'caretaker_verdict', 'created_at', 'updated_at');
+
+  const order = await db('orders')
+    .where({ pipeline_job_id: ev.pipeline_job_id, tenant_id: tenantId })
+    .first(
+      'id', 'order_number', 'customer_name', 'status', 'waybill', 'pincode',
+      'routing_status', 'manual_upload_reason', 'manual_uploaded_at',
+      'created_at', 'updated_at',
+    );
+
+  // History: every other evaluation against the same pipeline_job_id, oldest first.
+  const history = await db('caretaker_evaluations')
+    .where({ pipeline_job_id: ev.pipeline_job_id, tenant_id: tenantId })
+    .whereNot({ id })
+    .orderBy('created_at', 'asc')
+    .select(
+      'id', 'verdict', 'mode', 'resolution', 'resolved_by', 'resolved_at',
+      'reviewer_notes', 'summary', 'created_at',
+    );
+
   return res.status(200).json({
     success: true,
     data: {
@@ -127,6 +154,9 @@ router.get('/evaluations/:id', requirePermission('caretaker.view'), async (req: 
         lockers_resolved: lockersResolved,
         data_extracted: dataExtracted,
       },
+      pipeline_job: pipelineJob || null,
+      order: order || null,
+      history,
     },
   });
 });

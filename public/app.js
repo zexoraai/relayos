@@ -1214,6 +1214,39 @@ async function openReviewModal(evaluationId) {
   const addr = cd.delivery_address || {};
   const items = Array.isArray(cd.line_items) ? cd.line_items : [];
   const flags = Array.isArray(ev.flags) ? ev.flags : (typeof ev.flags === 'string' ? (() => { try { return JSON.parse(ev.flags); } catch { return []; } })() : []);
+  // New context fields from the detail endpoint — all optional.
+  const pj = data.data.pipeline_job || null;
+  const order = data.data.order || null;
+  const history = Array.isArray(data.data.history) ? data.data.history : [];
+
+  // Build the context banner. Shows: pipeline state, manual-upload origin
+  // (when the order has been routed to manual queue), and a compact history
+  // line if other evaluations exist for the same job.
+  const contextBlocks = [];
+  if (pj && pj.status === 'failed' && pj.last_error) {
+    contextBlocks.push(`<div class="text-[11px] bg-red-50 text-red-700 rounded-xl px-3 py-2"><span class="font-semibold">Last submit failed:</span> ${escapeHtml(pj.last_error)}</div>`);
+  } else if (pj && pj.status === 'processing' && pj.caretaker_verdict === 'approve') {
+    contextBlocks.push(`<div class="text-[11px] bg-blue-50 text-blue-700 rounded-xl px-3 py-2"><span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 mr-1 align-middle"></span>Currently resuming after a previous approval — submit may finish before you save here.</div>`);
+  }
+  if (order && order.routing_status === 'manual_upload' && order.manual_upload_reason) {
+    contextBlocks.push(`<div class="text-[11px] bg-amber-50 text-amber-700 rounded-xl px-3 py-2"><span class="font-semibold">Currently in Manual Upload:</span> ${escapeHtml(order.manual_upload_reason)}</div>`);
+  }
+  if (order && order.routing_status === 'collection') {
+    contextBlocks.push(`<div class="text-[11px] bg-indigo-50 text-indigo-700 rounded-xl px-3 py-2"><span class="font-semibold">Customer collection:</span> waiting for in-person pickup.</div>`);
+  }
+  if (history.length > 0) {
+    const summary = history.map((h) => {
+      const stamp = new Date(h.resolved_at || h.created_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' });
+      const who = h.resolution
+        ? `${h.resolution} by ${escapeHtml(h.resolved_by || 'unknown')}`
+        : `${escapeHtml(h.verdict || 'review')} (unresolved)`;
+      return `<li>${stamp}: ${who}${h.reviewer_notes ? ` — <span class="text-gray-500">${escapeHtml(h.reviewer_notes)}</span>` : ''}</li>`;
+    }).join('');
+    contextBlocks.push(`<div class="text-[11px] bg-gray-50 text-gray-700 rounded-xl px-3 py-2"><span class="font-semibold">Reviewed before (${history.length}):</span><ul class="list-disc list-inside mt-0.5 space-y-0.5">${summary}</ul></div>`);
+  }
+  const contextHtml = contextBlocks.length
+    ? `<div class="mt-3 space-y-2">${contextBlocks.join('')}</div>`
+    : '';
 
   const existing = document.getElementById('review-modal-overlay');
   if (existing) existing.remove();
@@ -1235,6 +1268,7 @@ async function openReviewModal(evaluationId) {
         <p class="text-xs text-gray-400">Edit any field below — your values will override what the AI extracted when the pipeline resumes.</p>
         ${flags.length ? `<div class="mt-3 flex flex-wrap gap-1">${flags.map(f => `<span class="px-2 py-0.5 bg-amber-50 text-amber-700 text-[11px] rounded-full">${escapeHtml(f)}</span>`).join('')}</div>` : ''}
         ${ev.summary ? `<div class="mt-2 text-xs text-gray-500">${escapeHtml(ev.summary)}</div>` : ''}
+        ${contextHtml}
       </div>
 
       <div class="p-6 space-y-4">
