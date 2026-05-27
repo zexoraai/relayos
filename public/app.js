@@ -955,6 +955,16 @@ function getStageSimpleSummary(stage) {
   if (s === 'DATA_VALIDATED') return d.valid ? 'Valid' : `Invalid: ${(d.errors||[]).join(', ')}`;
   if (s === 'SHOPIFY_ENRICHED') return d.enriched ? `${(d.line_items||[]).length} line items` : 'Skipped';
   if (s === 'LOCATION_RESOLVED') return d.delivery_address ? `${d.delivery_address.suburb||''}, ${d.delivery_address.city||''} (${d.delivery_address.lat||'?'}, ${d.delivery_address.lng||'?'})` : '';
+  if (s === 'LOCATION_RECONCILED') {
+    if (!d || d.decision === 'skipped') return 'Skipped (address complete)';
+    const conf = typeof d.confidence === 'number' ? ` ${(d.confidence*100|0)}%` : '';
+    const fixed = (d.missing_before||[]).filter((f) => !(d.missing_after||[]).includes(f));
+    const fixedLabel = fixed.length ? `recovered ${fixed.join(', ')}` : '';
+    if (d.decision === 'auto_merged_high') return `AI ${d.ai_used?'reconciled':'normalized'}${conf}${fixedLabel?' - '+fixedLabel:''}`;
+    if (d.decision === 'auto_merged_low')  return `AI filled (low conf${conf}) - please verify`;
+    if (d.decision === 'flagged')          return `Could not reconcile (still missing: ${(d.missing_after||[]).join(', ')||'?'})`;
+    return d.decision || '';
+  }
   if (s === 'CUSTOMER_DATA') return `${d.customerName||''} - ${d.customerPhone||''} - ${d.deliverMethod||''}`;
   if (s === 'LOCKERS_RESOLVED') return `${d.nearest_locker_name||d.terminal_id||'?'} (${d.distance_km||'?'}km)`;
   if (s === 'PAYLOAD_CREATED') return `Service: ${d.service_level_code||'?'}`;

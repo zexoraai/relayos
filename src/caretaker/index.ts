@@ -210,6 +210,86 @@ function checkRate(rules: CaretakerRulesRow, payload: PudoPayload): CaretakerChe
 }
 
 /**
+ * Address completeness check, reconciliation-aware.
+ *
+ * Reads the most recent LOCATION_RECONCILED stage result for this job
+ * (if any) and uses its decision to keep or relax the gate:
+ *
+ *   - decision=skipped or decision=auto_merged_high : pass silently
+ *     (geocode was either complete or AI got it back to complete with
+ *     high confidence + Google validation)
+ *   - decision=auto_merged_low                      : warn-severity
+ *     review (caretaker should glance at AI's fill-in)
+ *   - decision=flagged                              : error-severity
+ *     review (we need a human to confirm or fix)
+ *
+ * If the reconciliation stage didn't run at all (older jobs, or
+ * pipeline aborted before that point), fall back to a deterministic
+ * check on the customer data's delivery_address fields.
+ */
+async function checkAddressComplete(
+  pipelineJobId: string,
+  data: CustomerData,
+): Promise<CaretakerCheck> {
+  const db = getDb();
+  const reconRow = await db('pipeline_stage_results')
+    .where({ pipeline_job_id: pipelineJobId, stage: 'LOCATION_RECONCILED' })
+    .orderBy('created_at', 'desc')
+    .first();
+
+  let recon: any = null;
+  if (reconRow?.output_data) {
+    try {
+      recon = typeof reconRow.output_data === 'string'
+        ? JSON.parse(reconRow.output_data)
+        : reconRow.output_data;
+    } catch {}
+  }
+
+  if (recon && typeof recon.decision === 'string') {
+    if (recon.decision === 'skipped' || recon.decision === 'auto_merged_high') {
+      return {
+        check: 'address_complete',
+        passed: true,
+        severity: 'info',
+        message: recon.ai_used ? 'Address auto-recovered by AI (high confidence)' : undefined,
+      };
+    }
+    if (recon.decision === 'auto_merged_low') {
+      return {
+        check: 'address_complete',
+        passed: false,
+        severity: 'warn',
+        message: `AI filled missing address fields (confidence ${(recon.confidence || 0).toFixed(2)}) — please verify`,
+      };
+    }
+    // 'flagged'
+    const missing = Array.isArray(recon.missing_after) ? recon.missing_after : [];
+    return {
+      check: 'address_complete',
+      passed: false,
+      severity: 'error',
+      message: missing.length
+        ? `Address still missing: ${missing.join(', ')}`
+        : 'Address could not be confidently reconciled',
+    };
+  }
+
+  // Fallback for jobs without a reconciliation row.
+  const a: any = data.delivery_address || {};
+  const missing: string[] = [];
+  if (!a.suburb && !a.local_area) missing.push('suburb');
+  if (!a.city) missing.push('city');
+  if (!a.code && !a.postal_code) missing.push('postal_code');
+  return {
+    check: 'address_complete',
+    passed: missing.length === 0,
+    severity: 'error',
+    message: missing.length ? `Address missing: ${missing.join(', ')}` : undefined,
+  };
+}
+
+/**
  * Decide the verdict from the failed checks and the mode.
  *
  *   shadow:    always approve (just record)
@@ -311,6 +391,7 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
     checkRate(rules, input.payload),
     await checkDuplicateOrder(rules, input.tenantId, input.customerData),
     await checkRepeatPhone(rules, input.tenantId, input.customerData),
+    await checkAddressComplete(input.pipelineJobId, input.customerData),
   ];
 
   const decision = decide(checks, rules.mode);

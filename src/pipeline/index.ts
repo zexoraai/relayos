@@ -9,6 +9,7 @@ import { executeDataExtracted } from './stages/dataExtracted';
 import { executeDataValidated } from './stages/dataValidated';
 import { executeShopifyEnriched } from './stages/shopifyEnriched';
 import { executeLocationResolved } from './stages/locationResolved';
+import { executeLocationReconciled } from './stages/locationReconciled';
 import { executeCustomerData } from './stages/customerData';
 import { executeLockersResolved } from './stages/lockersResolved';
 import { executePayloadCreated } from './stages/payloadCreated';
@@ -137,9 +138,23 @@ export async function processPipelineJob(data: PipelineJobData): Promise<void> {
     childLog.info('Pipeline stage: LOCATION_RESOLVED');
     const location = await executeLocationResolved(jobId, extractedData);
 
+    // Stage 6.5: LOCATION_RECONCILED (AI fills geocoder gaps)
+    //
+    // If the geocoder dropped vital fields (suburb / city / postal_code),
+    // try a normalized re-geocode and then an LLM reconciliation against
+    // the original entered address. The reconciler's output supersedes
+    // the partial geocode for downstream stages whenever it merges
+    // cleanly, so customerData / lockersResolved / payloadCreated all
+    // see the recovered fields. When reconciliation can't confidently
+    // recover the address, the original geocode value is kept and the
+    // caretaker's address-completeness check still flags the order.
+    childLog.info('Pipeline stage: LOCATION_RECONCILED');
+    const reconciled = await executeLocationReconciled(jobId, tenantId, location);
+    const reconciledLocation = { delivery_address: reconciled.delivery_address };
+
     // Stage 7: CUSTOMER_DATA (assemble final customer object)
     childLog.info('Pipeline stage: CUSTOMER_DATA');
-    const customerData = await executeCustomerData(jobId, extractedData, location, enrichmentResult);
+    const customerData = await executeCustomerData(jobId, extractedData, reconciledLocation, enrichmentResult);
 
     // Route: if upload_type is 'manual' or collection_method is 'collection', create a partial order and stop
     if (customerData.upload_type === 'manual' || customerData.collectionMethod === 'collection') {
