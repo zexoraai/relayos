@@ -74,3 +74,4 @@ diag.sql
 diag-out.txt
 backfill.js
 backfill-verify.js
+dedup-caretaker.js

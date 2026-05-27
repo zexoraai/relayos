@@ -152,6 +152,137 @@ router.get('/stats', requirePermission('pipeline.view'), async (req: Authenticat
   });
 });
 
+// POST /pipeline/jobs/:id/address
+//
+// Inline address fix. Used when geocoding lost suburb / city / postal code
+// (or any other field) and the operator wants to correct it without
+// flipping to the Caretaker tab. Stores the override on the most recent
+// caretaker_evaluation for this job (so it gets applied on resume by
+// executeCustomerData), creates a fresh evaluation row if none exists,
+// and re-enqueues the pipeline. The new evaluation is created in
+// `resolution=approved` state so the resume path short-circuits cleanly.
+router.post('/jobs/:id/address', requirePermission('pipeline.manage'), async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const jobId = req.params.id as string;
+  const userEmail = req.tenant!.email || 'unknown';
+
+  const job = await db('pipeline_jobs').where({ id: jobId, tenant_id: tenantId }).first();
+  if (!job) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Pipeline job not found' } });
+  }
+
+  const body = req.body || {};
+  const addr = body.delivery_address || {};
+  // Whitelist editable address fields. Anything else is dropped.
+  const ALLOWED = [
+    'street', 'street1', 'street2', 'suburb', 'city', 'province', 'state',
+    'postal_code', 'pincode', 'country', 'latitude', 'longitude',
+    'terminal_id', 'nearest_locker_name', 'formatted',
+  ] as const;
+  const sanitized: Record<string, any> = {};
+  for (const k of ALLOWED) {
+    if (addr[k] !== undefined && addr[k] !== null && String(addr[k]).trim() !== '') {
+      sanitized[k] = typeof addr[k] === 'string' ? addr[k].trim() : addr[k];
+    }
+  }
+  if (Object.keys(sanitized).length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NO_FIELDS', message: 'Provide at least one editable address field in delivery_address.' },
+    });
+  }
+
+  // Reviewer overrides are stored as a json blob on caretaker_evaluations
+  // and shallow-merged in executeCustomerData on the next resume. Reuse
+  // the most recent row when present so we don't fragment audit history.
+  const lastEval = await db('caretaker_evaluations')
+    .where({ pipeline_job_id: jobId })
+    .orderBy('created_at', 'desc')
+    .first();
+
+  const overrideBlob = {
+    ...(lastEval?.reviewer_overrides
+      ? (typeof lastEval.reviewer_overrides === 'string'
+          ? JSON.parse(lastEval.reviewer_overrides)
+          : lastEval.reviewer_overrides)
+      : {}),
+    delivery_address: {
+      ...((lastEval?.reviewer_overrides &&
+        (typeof lastEval.reviewer_overrides === 'string'
+          ? JSON.parse(lastEval.reviewer_overrides)
+          : lastEval.reviewer_overrides))?.delivery_address || {}),
+      ...sanitized,
+    },
+  };
+
+  const summary = `Address edited inline by ${userEmail}: ${Object.keys(sanitized).join(', ')}`;
+
+  if (lastEval) {
+    await db('caretaker_evaluations').where({ id: lastEval.id }).update({
+      reviewer_overrides: JSON.stringify(overrideBlob),
+      reviewer_notes: lastEval.reviewer_notes
+        ? `${lastEval.reviewer_notes}\n${summary}`
+        : summary,
+      // If the row was still pending review, mark it approved-by-edit so
+      // the resume short-circuit treats it as a human-approved pass.
+      resolution: lastEval.resolution || 'approved',
+      resolved_by: lastEval.resolved_by || userEmail,
+      resolved_at: lastEval.resolved_at || new Date(),
+      updated_at: new Date(),
+    });
+  } else {
+    await db('caretaker_evaluations').insert({
+      tenant_id: tenantId,
+      pipeline_job_id: jobId,
+      verdict: 'approve',
+      mode: 'manual',
+      checks: JSON.stringify([]),
+      flags: JSON.stringify(['address_edited_inline']),
+      summary,
+      reviewer_overrides: JSON.stringify(overrideBlob),
+      reviewer_notes: summary,
+      resolution: 'approved',
+      resolved_by: userEmail,
+      resolved_at: new Date(),
+    });
+  }
+
+  // Re-enqueue from the same email so customerData stage picks up the
+  // override and downstream stages re-run with the corrected address.
+  await db.transaction(async (trx) => {
+    await trx('orders').where({ pipeline_job_id: jobId, tenant_id: tenantId }).delete();
+    await trx('pipeline_stage_results').where({ pipeline_job_id: jobId }).delete();
+    await trx('pipeline_jobs').where({ id: jobId, tenant_id: tenantId }).update({
+      status: 'pending',
+      current_stage: null,
+      last_error: null,
+      retry_count: 0,
+      updated_at: new Date(),
+    });
+  });
+
+  await enqueuePipelineJob(
+    {
+      emailId: job.email_id,
+      tenantId,
+      mailboxId: job.mailbox_id,
+      correlationId: job.correlation_id || job.email_id,
+    },
+    `pipeline-${job.email_id}-addr-fix-${Date.now()}`,
+  );
+
+  log.info({ tenantId, jobId, fields: Object.keys(sanitized), by: userEmail }, 'Pipeline address edited inline; job re-enqueued');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      message: 'Address override saved and pipeline re-enqueued',
+      overridden_fields: Object.keys(sanitized),
+    },
+  });
+});
+
 // POST /pipeline/trigger/:emailId - Manually trigger pipeline for an email
 router.post('/trigger/:emailId', requirePermission('pipeline.manage'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();

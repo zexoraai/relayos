@@ -359,10 +359,23 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
   }
 
   // Persist
-  const [row] = await db('caretaker_evaluations')
-    .insert({
-      tenant_id: input.tenantId,
-      pipeline_job_id: input.pipelineJobId,
+  //
+  // We may already have an open (unresolved) evaluation for this
+  // pipeline_job_id from a previous pass. Without this, every reprocess
+  // / re-run created a *new* row and left the old one stuck at
+  // verdict=review with no resolution, so the Caretaker tab showed two
+  // identical "review" pills for the same order. Collapse that here:
+  // if an unresolved row exists, UPDATE it instead of inserting; old
+  // resolutions stay intact for audit history.
+  const openExisting = await db('caretaker_evaluations')
+    .where({ pipeline_job_id: input.pipelineJobId })
+    .whereNull('resolution')
+    .orderBy('created_at', 'desc')
+    .first();
+
+  let row: { id: string };
+  if (openExisting) {
+    await db('caretaker_evaluations').where({ id: openExisting.id }).update({
       verdict: finalVerdict,
       mode: rules.mode,
       checks: JSON.stringify(checks),
@@ -373,8 +386,32 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
       llm_confidence: llm.ran ? llm.confidence : null,
       llm_reasons: JSON.stringify(llm.reasons),
       llm_flags: JSON.stringify(llm.flags),
-    })
-    .returning('id');
+      updated_at: new Date(),
+    });
+    row = { id: openExisting.id };
+    log.info(
+      { pipelineJobId: input.pipelineJobId, evaluationId: openExisting.id },
+      'Caretaker re-evaluated open row in place (no duplicate)',
+    );
+  } else {
+    const inserted = await db('caretaker_evaluations')
+      .insert({
+        tenant_id: input.tenantId,
+        pipeline_job_id: input.pipelineJobId,
+        verdict: finalVerdict,
+        mode: rules.mode,
+        checks: JSON.stringify(checks),
+        flags: JSON.stringify(mergedFlags),
+        summary: mergedSummary,
+        llm_ran: llm.ran,
+        llm_verdict: llm.ran ? llm.verdict : null,
+        llm_confidence: llm.ran ? llm.confidence : null,
+        llm_reasons: JSON.stringify(llm.reasons),
+        llm_flags: JSON.stringify(llm.flags),
+      })
+      .returning('id');
+    row = inserted[0];
+  }
 
   await db('pipeline_jobs').where({ id: input.pipelineJobId }).update({
     caretaker_verdict: finalVerdict,

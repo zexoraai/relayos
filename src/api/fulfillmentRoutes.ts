@@ -12,21 +12,56 @@ const router = Router();
 router.use(authMiddleware);
 
 // GET /fulfillment/jobs - List fulfillment jobs for the tenant
+//
+// Query params:
+//   limit       1..200 (default 50)
+//   milestone   filter on fj.milestone (comma-separated allowed)
+//   search      LIKE-match across waybill, order_number, customer_name,
+//               customer_phone (case-insensitive)
+//   sort        newest | oldest | last_polled | customer (default newest)
 router.get('/jobs', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
-  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const milestoneFilter = (req.query.milestone as string | undefined)?.trim();
+  const searchRaw = (req.query.search as string | undefined)?.trim();
+  const sort = (req.query.sort as string | undefined)?.trim() || 'newest';
 
-  const jobs = await db('fulfillment_jobs as fj')
+  const q = db('fulfillment_jobs as fj')
     .leftJoin('orders as o', 'o.id', 'fj.order_id')
-    .where('fj.tenant_id', tenantId)
-    .orderBy('fj.created_at', 'desc')
+    .where('fj.tenant_id', tenantId);
+
+  if (milestoneFilter) {
+    const list = milestoneFilter.split(',').map((s) => s.trim()).filter(Boolean);
+    if (list.length === 1) q.where('fj.milestone', list[0]);
+    else if (list.length > 1) q.whereIn('fj.milestone', list);
+  }
+
+  if (searchRaw && searchRaw.length >= 2) {
+    const pattern = `%${searchRaw.replace(/[%_]/g, '\\$&')}%`;
+    q.where((b) => {
+      b.where('fj.waybill', 'ilike', pattern)
+        .orWhere('o.order_number', 'ilike', pattern)
+        .orWhere('o.customer_name', 'ilike', pattern)
+        .orWhere('o.customer_phone', 'ilike', pattern);
+    });
+  }
+
+  switch (sort) {
+    case 'oldest':       q.orderBy('fj.created_at', 'asc'); break;
+    case 'last_polled':  q.orderBy('fj.last_polled_at', 'desc'); break;
+    case 'customer':     q.orderBy('o.customer_name', 'asc'); break;
+    default:             q.orderBy('fj.created_at', 'desc');
+  }
+
+  const jobs = await q
     .limit(limit)
     .select(
       'fj.id', 'fj.waybill', 'fj.current_stage', 'fj.status', 'fj.courier_status',
       'fj.milestone', 'fj.poll_count', 'fj.last_polled_at', 'fj.next_poll_at',
       'fj.created_at', 'fj.updated_at',
-      'o.order_number', 'o.customer_name', 'o.delivery_method', 'o.pincode',
+      'o.order_number', 'o.customer_name', 'o.customer_phone',
+      'o.delivery_method', 'o.pincode',
       'o.shopify_fulfilled', 'o.shopify_fulfilled_at', 'o.shopify_fulfillment_status'
     );
 

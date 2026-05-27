@@ -22,6 +22,7 @@ export const REQUEST_BODIES: Record<string, unknown> = {
   // pipelineRoutes.ts
   'POST /pipeline/trigger/:emailId': {},
   'POST /pipeline/jobs/:id/reprocess': {},
+  'POST /pipeline/jobs/:id/address': { delivery_address: { suburb: 'Test', city: 'Cape Town' } },
 
   // fulfillmentRoutes.ts
   'POST /fulfillment/poll/:id': {},

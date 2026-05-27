@@ -818,7 +818,7 @@ async function showJobDetail(index, opts) {
   if (order) {
     html += `<div class="bg-surface-100 rounded-2xl p-4 mb-4">`;
     html += `<div class="flex items-center justify-between"><div><div class="text-xs text-gray-400 uppercase font-semibold tracking-wide">Order</div>`;
-    html += `<div class="text-sm font-bold mt-0.5">#${order.order_number||'-'} - ${escapeHtml(order.customer_name||'')}</div></div>${badge(order.status==='delivered'||order.status==='completed'?'completed':order.status==='cancelled'||order.status==='failed'?'failed':'processing', order.status||'pending')}</div>`;
+    html += `<div class="text-sm font-bold mt-0.5">#${order.order_number||'-'} - ${escapeHtml(order.customer_name||'')}</div></div><div class="flex items-center gap-2">${badge(order.status==='delivered'||order.status==='completed'?'completed':order.status==='cancelled'||order.status==='failed'?'failed':'processing', order.status||'pending')}<button onclick="openAddressEditModal('${data.data.job.id}', ${JSON.stringify(JSON.stringify(order || {})).replace(/"/g,'&quot;')})" class="text-[11px] px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100 font-semibold whitespace-nowrap" title="Edit delivery address and re-run pipeline">&#9998; Edit address</button></div></div>`;
     html += `<div class="grid grid-cols-3 gap-3 mt-3">`;
     html += `<div><div class="text-[10px] text-gray-400 uppercase">Waybill</div><div class="text-sm font-semibold">${order.waybill||'-'}</div></div>`;
     html += `<div><div class="text-[10px] text-gray-400 uppercase">PIN</div><div class="text-sm font-semibold">${order.pincode||'-'}</div></div>`;
@@ -1018,43 +1018,163 @@ async function renderAgents() {
 
 // ---- Stub renders for remaining tabs (functional, Tailwind-styled) ----
 
+// Fulfillment view state — persisted in-memory for the session so a tab
+// switch doesn't reset filters. Resets on full reload.
+let _fulfillmentFilters = { milestone: '', search: '', sort: 'newest' };
+let _fulfillmentActiveJobId = null;
+
 async function renderFulfillment() {
-  const { data } = await api('GET', '/fulfillment/jobs?limit=20');
+  const f = _fulfillmentFilters;
+  const params = new URLSearchParams();
+  params.set('limit', '100');
+  if (f.milestone) params.set('milestone', f.milestone);
+  if (f.search) params.set('search', f.search);
+  if (f.sort) params.set('sort', f.sort);
+  const [{ data }, { data: stats }] = await Promise.all([
+    api('GET', '/fulfillment/jobs?' + params.toString()),
+    api('GET', '/fulfillment/stats'),
+  ]);
   if (!data.success) { document.getElementById('tab-content').innerHTML = emptyState('Failed to load',''); return; }
   fulfillmentJobs = data.data.jobs;
-  let html = `<div class="bg-white rounded-3xl shadow-card p-6">`;
-  html += `<h3 class="font-bold text-base mb-4">Active Fulfillment Jobs</h3>`;
-  if (fulfillmentJobs.length === 0) { html += emptyState('No fulfillment jobs','Orders with waybills will appear here automatically.'); }
-  else {
-    html += `<div class="space-y-2">`;
-    fulfillmentJobs.forEach((j,i) => {
-      const m = (j.milestone||'pending').replace(/_/g,' ');
-      // Shopify-fulfilled pill: green check on rows where Shopify has been
-      // marked fulfilled (typically once milestone=in_transit), amber dot
-      // when not. Skips entirely on cancelled/failed terminal jobs because
-      // Shopify state there is "cancelled" or n/a.
-      let shopifyPill = '';
+  const byMilestone = (stats && stats.success ? stats.data.by_milestone : {}) || {};
+
+  // Toolbar: search + sort + filter chips
+  const chipDef = [
+    ['',                  'All',          Object.values(byMilestone).reduce((a,b)=>a+(b||0),0)],
+    ['submitted',         'Submitted',    byMilestone.submitted || 0],
+    ['collected',         'Collected',    byMilestone.collected || 0],
+    ['in_transit',        'In transit',   byMilestone.in_transit || 0],
+    ['at_locker',         'At locker',    byMilestone.at_locker || 0],
+    ['out_for_delivery',  'Out for del.', byMilestone.out_for_delivery || 0],
+    ['delivered',         'Delivered',    byMilestone.delivered || 0],
+    ['cancelled',         'Cancelled',    byMilestone.cancelled || 0],
+    ['failed',            'Failed',       byMilestone.failed || 0],
+  ];
+  let chipsHtml = '<div class="flex gap-1.5 flex-wrap mb-3">';
+  chipDef.forEach(([k, label, count]) => {
+    const active = (k || '') === (f.milestone || '');
+    chipsHtml += `<button onclick="setFulfillmentFilter('milestone', ${JSON.stringify(k)})" class="text-[11px] px-2.5 py-1 rounded-full font-medium transition-all ${active ? 'bg-brand-400 text-gray-900' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'}">${label}<span class="ml-1 ${active ? 'text-gray-900/70' : 'text-gray-400'}">${count}</span></button>`;
+  });
+  chipsHtml += '</div>';
+
+  const toolbarHtml =
+    `<div class="bg-white rounded-3xl shadow-card p-4 md:p-6 mb-4">` +
+    `<div class="flex flex-col md:flex-row md:items-center gap-2 mb-3">` +
+      `<input id="fulfillment-search" placeholder="Search waybill, order#, customer, phone..." value="${escapeHtml(f.search || '')}" oninput="onFulfillmentSearchInput(event)" class="flex-1 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">` +
+      `<select id="fulfillment-sort" onchange="setFulfillmentFilter('sort', this.value)" class="px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">` +
+        `<option value="newest"${f.sort==='newest'?' selected':''}>Newest first</option>` +
+        `<option value="oldest"${f.sort==='oldest'?' selected':''}>Oldest first</option>` +
+        `<option value="last_polled"${f.sort==='last_polled'?' selected':''}>Last polled</option>` +
+        `<option value="customer"${f.sort==='customer'?' selected':''}>Customer name</option>` +
+      `</select>` +
+    `</div>` +
+    chipsHtml +
+    `</div>`;
+
+  // List + detail layout: split-pane on desktop, stacked on mobile.
+  let listHtml = '<div class="bg-white rounded-3xl shadow-card p-4 md:p-6">';
+  listHtml += `<div class="flex items-center justify-between mb-3">`;
+  listHtml += `<h3 class="font-bold text-base">${fulfillmentJobs.length} order${fulfillmentJobs.length===1?'':'s'}</h3>`;
+  listHtml += `<button onclick="renderFulfillment()" class="text-[11px] text-gray-400 hover:text-gray-600">refresh</button>`;
+  listHtml += `</div>`;
+  if (fulfillmentJobs.length === 0) {
+    listHtml += emptyState('No orders match', f.search || f.milestone ? 'Adjust the filters above.' : 'Orders with waybills will appear here automatically.');
+  } else {
+    listHtml += `<div class="space-y-2 max-h-[70vh] overflow-y-auto pr-1">`;
+    let lastBucket = null;
+    fulfillmentJobs.forEach((j, i) => {
+      const ms = (j.milestone||'pending').replace(/_/g,' ');
       const terminal = j.milestone === 'cancelled' || j.milestone === 'failed';
+      // Time bucket headers help skim 100 rows fast.
+      const bucket = bucketLabel(j.created_at);
+      if (bucket !== lastBucket) {
+        listHtml += `<div class="text-[10px] uppercase tracking-wide text-gray-400 mt-3 mb-1 first:mt-0">${bucket}</div>`;
+        lastBucket = bucket;
+      }
+      let shopifyPill = '';
       if (!terminal) {
         if (j.shopify_fulfilled) {
-          const ts = j.shopify_fulfilled_at ? new Date(j.shopify_fulfilled_at).toLocaleString() : '';
-          shopifyPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="Shopify fulfillment created${ts ? ' on ' + escapeHtml(ts) : ''}">Shopify &#10003;</span>`;
+          shopifyPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="Shopify fulfillment created${j.shopify_fulfilled_at ? ' on ' + escapeHtml(new Date(j.shopify_fulfilled_at).toLocaleString()) : ''}">Shopify &#10003;</span>`;
         } else {
-          shopifyPill = `<span class="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="Shopify fulfillment not yet created (auto-fires when milestone=in_transit)">Shopify pending</span>`;
+          shopifyPill = `<span class="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">Shopify pending</span>`;
         }
       }
-      html += `<div onclick="showFulfillmentDetail(${i})" class="flex items-center justify-between p-4 rounded-2xl border border-gray-100 hover:border-brand-300 cursor-pointer transition-all">`;
-      html += `<div><div class="text-sm font-semibold">${j.waybill||'-'}</div><div class="text-xs text-gray-400">${j.customer_name||''} - ${j.delivery_method||''}</div></div>`;
-      html += `<div class="flex items-center gap-2 flex-wrap justify-end">${shopifyPill}${badge(j.milestone==='delivered'?'completed':j.milestone==='cancelled'||j.milestone==='failed'?'failed':'processing', m)}<span class="text-xs text-gray-400">${j.poll_count||0} polls</span></div>`;
-      html += `</div>`;
+      const active = _fulfillmentActiveJobId === j.id;
+      listHtml += `<div onclick="showFulfillmentDetail(${i})" class="p-3 rounded-2xl border ${active ? 'border-brand-400 bg-brand-50/40' : 'border-gray-100 hover:border-brand-300'} cursor-pointer transition-all">`;
+      listHtml += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
+      listHtml += `<div class="min-w-0 flex-1">`;
+      listHtml += `<div class="text-sm font-semibold truncate">${j.waybill||'-'}${j.order_number ? '<span class="ml-2 text-[11px] text-gray-400">#'+escapeHtml(j.order_number)+'</span>' : ''}</div>`;
+      listHtml += `<div class="text-xs text-gray-500 truncate">${escapeHtml(j.customer_name||'')}${j.delivery_method?' &middot; '+escapeHtml(j.delivery_method):''}</div>`;
+      listHtml += `</div>`;
+      listHtml += `<div class="flex items-center gap-1.5 flex-wrap justify-end">${shopifyPill}${badge(j.milestone==='delivered'?'completed':terminal?'failed':'processing', ms)}</div>`;
+      listHtml += `</div>`;
+      listHtml += `</div>`;
     });
-    html += `</div>`;
+    listHtml += `</div>`;
   }
-  html += `</div><div id="fulfillment-detail-panel" class="mt-6"></div>`;
+  listHtml += `</div>`;
+
+  // Two-column on desktop, single-column on mobile.
+  const html =
+    toolbarHtml +
+    `<div class="grid grid-cols-1 lg:grid-cols-5 gap-4">` +
+    `<div class="lg:col-span-2">${listHtml}</div>` +
+    `<div class="lg:col-span-3"><div id="fulfillment-detail-panel" class="lg:sticky lg:top-4">${
+      _fulfillmentActiveJobId ? '<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Loading detail...</div>' : '<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Select an order on the left to see its detail.</div>'
+    }</div></div>` +
+    `</div>`;
+
   document.getElementById('tab-content').innerHTML = html;
+
+  // Restore detail if we had one open — keeps it sticky across re-renders.
+  if (_fulfillmentActiveJobId) {
+    const idx = fulfillmentJobs.findIndex((j) => j.id === _fulfillmentActiveJobId);
+    if (idx >= 0) showFulfillmentDetail(idx);
+    else _fulfillmentActiveJobId = null;
+  }
+}
+
+// Helper: human-readable time-bucket label for grouping fulfillment rows.
+function bucketLabel(ts) {
+  if (!ts) return 'Older';
+  const d = new Date(ts);
+  const now = new Date();
+  const diffMs = now - d;
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (d.toDateString() === now.toDateString()) return 'Today';
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  if (diffMs < 7 * dayMs) return 'This week';
+  if (diffMs < 30 * dayMs) return 'This month';
+  return 'Older';
+}
+
+// Filter chip / sort dropdown handler.
+function setFulfillmentFilter(key, value) {
+  _fulfillmentFilters[key] = value;
+  renderFulfillment();
+}
+
+// Debounced search input — fires 300ms after the user stops typing so we
+// don't refetch on every keystroke.
+let _fulfillmentSearchTimer = null;
+function onFulfillmentSearchInput(ev) {
+  const v = ev.target.value || '';
+  clearTimeout(_fulfillmentSearchTimer);
+  _fulfillmentSearchTimer = setTimeout(() => {
+    _fulfillmentFilters.search = v;
+    renderFulfillment();
+  }, 300);
 }
 async function showFulfillmentDetail(i) {
   const j = fulfillmentJobs[i];
+  if (!j) return;
+  _fulfillmentActiveJobId = j.id;
+  // Subtle ring on the active row so the user always knows which one is open.
+  document.querySelectorAll('#tab-content [onclick^="showFulfillmentDetail"]').forEach((el, idx) => {
+    el.classList.toggle('border-brand-400', idx === i);
+    el.classList.toggle('bg-brand-50/40', idx === i);
+  });
   const [{ data }, { data: notifData }] = await Promise.all([
     api('GET', '/fulfillment/jobs/' + j.id),
     api('GET', '/fulfillment/jobs/' + j.id + '/notifications'),
@@ -1363,6 +1483,88 @@ async function reopenCk(id) {
     renderCaretaker();
   } else {
     toast(data?.error?.message || 'Failed to reopen', 'error');
+  }
+}
+
+/**
+ * Inline address-edit modal for the Pipeline detail view.
+ *
+ * Lets the operator correct a geocode result without flipping to the
+ * Caretaker tab. On save, calls POST /pipeline/jobs/:id/address which
+ * stores the override on the most recent caretaker_evaluation and
+ * re-enqueues the pipeline. The pipeline picks the override up via
+ * executeCustomerData on the next pass.
+ */
+function openAddressEditModal(jobId, orderJson) {
+  let order = {};
+  try { order = JSON.parse(orderJson); } catch {}
+  let addr = {};
+  try {
+    addr = typeof order.delivery_address === 'string'
+      ? JSON.parse(order.delivery_address)
+      : (order.delivery_address || {});
+  } catch {}
+
+  const f = (id, label, value, placeholder = '') =>
+    `<div><label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">${label}</label>` +
+    `<input id="${id}" value="${escapeHtml(value == null ? '' : String(value))}" placeholder="${escapeHtml(placeholder)}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400"></div>`;
+
+  const body =
+    `<p class="text-xs text-gray-500 mb-3">Correct any field below. The pipeline re-runs from scratch with these values applied as a reviewer override.</p>` +
+    `<div class="grid grid-cols-2 gap-3">` +
+      f('addr-street', 'Street',     addr.street || addr.street1 || addr.street_address || '', '12 Long St') +
+      f('addr-suburb', 'Suburb',     addr.suburb || '', 'Sea Point') +
+      f('addr-city',   'City',       addr.city || '', 'Cape Town') +
+      f('addr-province','Province',  addr.province || addr.state || addr.zone || '', 'Western Cape') +
+      f('addr-postal', 'Postal code',addr.postal_code || addr.pincode || addr.code || '', '8005') +
+      f('addr-country','Country',    addr.country || 'South Africa', 'South Africa') +
+      f('addr-lat',    'Latitude',   addr.latitude || addr.lat || '', '-33.92') +
+      f('addr-lng',    'Longitude',  addr.longitude || addr.lng || '', '18.42') +
+    `</div>` +
+    `<div class="mt-3 text-[11px] text-gray-400">Hint: leaving lat/lng blank lets the pipeline re-geocode the corrected text fields.</div>`;
+
+  const footer =
+    `<button onclick="closeModal({target:document.querySelector('.modal-backdrop')})" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Cancel</button>` +
+    `<button id="addr-save-btn" onclick="submitAddressEdit('${jobId}')" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm">Save and re-run pipeline</button>`;
+  openModal('Edit delivery address', body, footer);
+}
+
+async function submitAddressEdit(jobId) {
+  const v = (id) => (document.getElementById(id)?.value || '').trim();
+  const fields = {
+    street: v('addr-street'),
+    suburb: v('addr-suburb'),
+    city: v('addr-city'),
+    province: v('addr-province'),
+    postal_code: v('addr-postal'),
+    country: v('addr-country'),
+    latitude: v('addr-lat'),
+    longitude: v('addr-lng'),
+  };
+  // Drop empty fields so we don't overwrite existing-good with blanks.
+  const delivery_address = Object.fromEntries(
+    Object.entries(fields).filter(([, val]) => val !== ''),
+  );
+  // Coerce lat/lng to numbers where present.
+  if (delivery_address.latitude) delivery_address.latitude = Number(delivery_address.latitude);
+  if (delivery_address.longitude) delivery_address.longitude = Number(delivery_address.longitude);
+
+  if (Object.keys(delivery_address).length === 0) {
+    toast('Provide at least one field', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('addr-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+
+  const { data } = await api('POST', `/pipeline/jobs/${jobId}/address`, { delivery_address });
+  if (data?.success) {
+    toast('Address updated; pipeline re-running', 'success');
+    closeModal({ target: document.querySelector('.modal-backdrop') });
+    setTimeout(() => { if (typeof renderPipeline === 'function') renderPipeline(); }, 500);
+  } else {
+    toast(data?.error?.message || 'Failed to save address', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Save and re-run pipeline'; }
   }
 }
 

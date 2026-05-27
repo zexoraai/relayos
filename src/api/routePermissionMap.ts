@@ -115,6 +115,7 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/stats', permission: PERMISSIONS.PIPELINE.VIEW },
   { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/trigger/:emailId', permission: PERMISSIONS.PIPELINE.MANAGE },
   { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/jobs/:id/reprocess', permission: PERMISSIONS.PIPELINE.MANAGE },
+  { router: 'pipelineRoutes', method: 'POST', path: '/pipeline/jobs/:id/address', permission: PERMISSIONS.PIPELINE.MANAGE },
 
   // ------------------------------------------------------------------
   // fulfillmentRoutes.ts (mounted at /fulfillment)
