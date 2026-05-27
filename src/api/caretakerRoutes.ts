@@ -60,6 +60,18 @@ router.get('/evaluations', requirePermission('caretaker.view'), async (req: Auth
   let q = db('caretaker_evaluations as ce')
     .leftJoin('pipeline_jobs as pj', 'pj.id', 'ce.pipeline_job_id')
     .leftJoin('orders as o', 'o.pipeline_job_id', 'pj.id')
+    // Latest reconciliation row per pipeline_job (if any). Done as a
+    // correlated lateral join so a job with multiple reconciliations
+    // (e.g. across reprocesses) returns only the most recent.
+    .joinRaw(`
+      LEFT JOIN LATERAL (
+        SELECT decision, confidence, ai_used, ai_suggestion, missing_after
+          FROM ai_address_reconciliations
+         WHERE pipeline_job_id = ce.pipeline_job_id
+         ORDER BY created_at DESC
+         LIMIT 1
+      ) recon ON TRUE
+    `)
     .where('ce.tenant_id', tenantId)
     .select(
       'ce.id', 'ce.verdict', 'ce.mode', 'ce.flags', 'ce.checks',
@@ -74,6 +86,11 @@ router.get('/evaluations', requirePermission('caretaker.view'), async (req: Auth
       'o.customer_name as customer_name',
       'o.waybill as order_waybill',
       'o.status as order_status',
+      'recon.decision as recon_decision',
+      'recon.confidence as recon_confidence',
+      'recon.ai_used as recon_ai_used',
+      'recon.ai_suggestion as recon_ai_suggestion',
+      'recon.missing_after as recon_missing_after',
     )
     .orderBy('ce.created_at', 'desc')
     .limit(parseInt(limit as string, 10));
@@ -118,6 +135,12 @@ router.get('/evaluations/:id', requirePermission('caretaker.view'), async (req: 
   const customerData = parse(findStage('CUSTOMER_DATA')?.output_data);
   const lockersResolved = parse(findStage('LOCKERS_RESOLVED')?.output_data);
   const dataExtracted = parse(findStage('DATA_EXTRACTED')?.output_data);
+  // The new reconciliation stage carries the entered/geocoded/AI triplet
+  // and the decision so the modal can show the operator exactly what was
+  // dropped, what the AI suggested, and what we ended up with.
+  const locationResolved = parse(findStage('LOCATION_RESOLVED')?.output_data);
+  const locationReconciled = parse(findStage('LOCATION_RECONCILED')?.output_data);
+  const payloadCreated = parse(findStage('PAYLOAD_CREATED')?.output_data);
 
   // Reviewer context: what's the underlying pipeline job actually doing,
   // is the order already in a queue, and what other evaluations exist on
@@ -154,6 +177,9 @@ router.get('/evaluations/:id', requirePermission('caretaker.view'), async (req: 
         customer_data: customerData,
         lockers_resolved: lockersResolved,
         data_extracted: dataExtracted,
+        location_resolved: locationResolved,
+        location_reconciled: locationReconciled,
+        payload_created: payloadCreated,
       },
       pipeline_job: pipelineJob || null,
       order: order || null,

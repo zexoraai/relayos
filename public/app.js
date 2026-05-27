@@ -1448,7 +1448,14 @@ async function renderCaretaker() {
 
       let actions = '';
       if (e.verdict==='review' && !e.resolution) {
-        actions = `<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
+        // Accept AI shortcut: only renders when the address reconciler
+        // produced a usable suggestion. One click sends a resolve with
+        // overrides built from the AI suggestion — saves the reviewer
+        // ~6 field-by-field clicks for the common case.
+        const acceptAiBtn = (e.recon_ai_used && e.recon_ai_suggestion && (e.recon_decision === 'auto_merged_low' || (e.recon_decision === 'flagged' && e.recon_confidence >= 0.5)))
+          ? `<button onclick="acceptAiSuggestion('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100" title="Approve using AI's address fill-in (confidence ${typeof e.recon_confidence==='number'?(e.recon_confidence*100|0)+'%':'?'})">&#9889; Accept AI &amp; approve</button>`
+          : '';
+        actions = `${acceptAiBtn}<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
       } else if (e.verdict==='reject' || e.resolution==='rejected') {
         actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen for review</button>`;
       } else if (e.verdict==='approve' && !e.resolution) {
@@ -1493,6 +1500,43 @@ async function reopenCk(id) {
     renderCaretaker();
   } else {
     toast(data?.error?.message || 'Failed to reopen', 'error');
+  }
+}
+
+/**
+ * One-click approval that uses the AI reconciler's address suggestion
+ * verbatim. Avoids opening the modal when the operator trusts the AI's
+ * fill-in. Audit row records resolved_by + the override blob.
+ */
+async function acceptAiSuggestion(evaluationId) {
+  // Re-fetch the evaluation so we send the canonical suggestion blob.
+  const { data: gd } = await api('GET', `/caretaker/evaluations/${evaluationId}`);
+  if (!gd?.success) { toast('Failed to load evaluation', 'error'); return; }
+  const recon = gd.data?.snapshot?.location_reconciled || null;
+  const ai = recon && recon.ai_suggestion ? recon.ai_suggestion : null;
+  if (!ai || Object.keys(ai).length === 0) {
+    toast('No AI suggestion available', 'warning');
+    return;
+  }
+  const conf = typeof recon.confidence === 'number' ? `${(recon.confidence * 100) | 0}%` : '?';
+  if (!confirm(`Approve this order using the AI's reconstructed address (confidence ${conf})?`)) return;
+
+  // Map AI's keys onto the override schema. Only non-empty fields go through.
+  const addr = {};
+  ['street_address', 'suburb', 'city', 'zone', 'code', 'country'].forEach((k) => {
+    const v = ai[k];
+    if (v && String(v).trim()) addr[k] = String(v).trim();
+  });
+  const body = { resolution: 'approved' };
+  if (Object.keys(addr).length) body.overrides = { delivery_address: addr };
+  body.notes = `Accepted AI address suggestion (confidence ${conf}, decision ${recon.decision})`;
+
+  const { data } = await api('POST', `/caretaker/evaluations/${evaluationId}/resolve`, body);
+  if (data?.success) {
+    toast('Approved with AI address — pipeline resuming', 'success');
+    setTimeout(() => renderCaretaker(), 600);
+  } else {
+    toast(data?.error?.message || 'Failed to approve', 'error');
   }
 }
 
@@ -1641,6 +1685,9 @@ async function openReviewModal(evaluationId) {
   const pj = data.data.pipeline_job || null;
   const order = data.data.order || null;
   const history = Array.isArray(data.data.history) ? data.data.history : [];
+  const locResolved = snap.location_resolved && snap.location_resolved.delivery_address ? snap.location_resolved.delivery_address : null;
+  const recon = snap.location_reconciled || null;
+  const lockerSnap = snap.lockers_resolved || null;
 
   // Build the context banner. Shows: pipeline state, manual-upload origin
   // (when the order has been routed to manual queue), and a compact history
@@ -1682,10 +1729,10 @@ async function openReviewModal(evaluationId) {
     : '';
 
   overlay.innerHTML = `
-    <div class="bg-white rounded-3xl shadow-card w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+    <div class="bg-white rounded-3xl shadow-card w-full max-w-3xl max-h-[90vh] overflow-y-auto">
       <div class="p-6 border-b border-gray-100">
         <div class="flex items-center justify-between mb-1">
-          <h3 class="font-bold text-base">Review &amp; Approve</h3>
+          <h3 class="font-bold text-base">Review &amp; Approve${order && order.order_number ? ` &middot; <span class="text-gray-500 font-semibold">#${escapeHtml(order.order_number)}</span>` : ''}</h3>
           <button onclick="closeReviewModal()" class="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
         </div>
         <p class="text-xs text-gray-400">Edit any field below — your values will override what the AI extracted when the pipeline resumes.</p>
@@ -1707,15 +1754,78 @@ async function openReviewModal(evaluationId) {
         </div>
 
         <div>
-          <h4 class="font-semibold text-sm mb-2">Delivery address</h4>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div class="md:col-span-2"><label class="block text-xs text-gray-400 mb-1">Street</label><input id="rv-addr-street" value="${escapeHtml(addr.street_address||addr.entered_address||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
-            <div><label class="block text-xs text-gray-400 mb-1">Suburb</label><input id="rv-addr-suburb" value="${escapeHtml(addr.suburb||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
-            <div><label class="block text-xs text-gray-400 mb-1">City</label><input id="rv-addr-city" value="${escapeHtml(addr.city||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
-            <div><label class="block text-xs text-gray-400 mb-1">Province</label><input id="rv-addr-province" value="${escapeHtml(addr.province||addr.region||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
-            <div><label class="block text-xs text-gray-400 mb-1">Postal code</label><input id="rv-addr-postal" value="${escapeHtml(addr.postal_code||'')}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="font-semibold text-sm">Delivery address</h4>
+            ${recon ? `<span class="text-[10px] px-2 py-0.5 rounded-full font-medium ${recon.decision==='auto_merged_high'?'bg-green-50 text-green-700':recon.decision==='auto_merged_low'?'bg-amber-50 text-amber-700':recon.decision==='flagged'?'bg-red-50 text-red-700':'bg-gray-100 text-gray-500'}">AI: ${recon.decision==='auto_merged_high'?'verified':recon.decision==='auto_merged_low'?'low conf':recon.decision==='flagged'?'needs review':recon.decision||'-'}${typeof recon.confidence==='number'?' '+(recon.confidence*100|0)+'%':''}</span>` : ''}
           </div>
+          ${(() => {
+            // Three-column comparison: Entered (raw), Geocoded (Google's
+            // structured result, possibly with gaps), AI suggestion (the
+            // reconciler's reconstruction). The radio per row picks which
+            // value lands in the override on save. The AI value is
+            // pre-selected when available, geocoded otherwise, and entered
+            // as the last fallback so something is always chosen.
+            const aiSugg = (recon && recon.ai_suggestion) ? recon.ai_suggestion : {};
+            const enteredAddr = addr.entered_address || (locResolved && locResolved.entered_address) || '';
+            // For the Entered column we don't have structured fields — show
+            // the raw string in the street row, leave others blank.
+            const fields = [
+              { key: 'street_address', label: 'Street', entered: enteredAddr, geocoded: (locResolved && locResolved.street_address) || '', ai: aiSugg.street_address || '' },
+              { key: 'suburb',         label: 'Suburb', entered: '',          geocoded: (locResolved && locResolved.suburb) || '',         ai: aiSugg.suburb || '' },
+              { key: 'city',           label: 'City',   entered: '',          geocoded: (locResolved && locResolved.city) || '',           ai: aiSugg.city || '' },
+              { key: 'zone',           label: 'Province', entered: '',        geocoded: (locResolved && locResolved.zone) || '',           ai: aiSugg.zone || '' },
+              { key: 'code',           label: 'Postal',   entered: '',        geocoded: (locResolved && locResolved.code) || '',           ai: aiSugg.code || '' },
+              { key: 'country',        label: 'Country',  entered: '',        geocoded: (locResolved && locResolved.country) || 'South Africa', ai: aiSugg.country || '' },
+            ];
+            // Default current value: prefer AI suggestion, then geocode, then entered.
+            // The 'edit' input below mirrors whichever radio is selected.
+            const defaultPick = (f) => f.ai ? 'ai' : f.geocoded ? 'geocoded' : 'entered';
+            return `
+              <div class="hidden md:grid grid-cols-[110px_1fr_1fr_1fr_1.2fr] gap-2 text-[10px] uppercase tracking-wide text-gray-400 mb-1 px-1">
+                <div></div><div>Entered</div><div>Geocoded</div><div>AI suggestion</div><div>Use this value</div>
+              </div>
+              <div class="space-y-1.5" id="rv-addr-grid">
+                ${fields.map((f) => {
+                  const pick = defaultPick(f);
+                  const value = pick === 'ai' ? f.ai : pick === 'geocoded' ? f.geocoded : f.entered;
+                  return `
+                  <div class="grid grid-cols-1 md:grid-cols-[110px_1fr_1fr_1fr_1.2fr] gap-2 items-center" data-rv-addr-row="${f.key}">
+                    <div class="text-xs text-gray-500 font-medium">${f.label}</div>
+                    <label class="flex items-start gap-1.5 cursor-pointer p-1.5 rounded-lg hover:bg-gray-50 ${pick==='entered'?'bg-gray-50':''}">
+                      <input type="radio" name="rv-addr-${f.key}-pick" value="entered" ${pick==='entered'?'checked':''} ${!f.entered?'disabled':''} onchange="onAddressPickChange('${f.key}', 'entered')" class="mt-0.5">
+                      <span class="text-[11px] ${f.entered?'text-gray-700':'text-gray-300'} break-words">${escapeHtml(f.entered) || '<span class="italic">empty</span>'}</span>
+                    </label>
+                    <label class="flex items-start gap-1.5 cursor-pointer p-1.5 rounded-lg hover:bg-gray-50 ${pick==='geocoded'?'bg-gray-50':''}">
+                      <input type="radio" name="rv-addr-${f.key}-pick" value="geocoded" ${pick==='geocoded'?'checked':''} ${!f.geocoded?'disabled':''} onchange="onAddressPickChange('${f.key}', 'geocoded')" class="mt-0.5">
+                      <span class="text-[11px] ${f.geocoded?'text-gray-700':'text-gray-300'} break-words">${escapeHtml(f.geocoded) || '<span class="italic">empty</span>'}</span>
+                    </label>
+                    <label class="flex items-start gap-1.5 cursor-pointer p-1.5 rounded-lg hover:bg-amber-50 ${pick==='ai'?'bg-amber-50':''}">
+                      <input type="radio" name="rv-addr-${f.key}-pick" value="ai" ${pick==='ai'?'checked':''} ${!f.ai?'disabled':''} onchange="onAddressPickChange('${f.key}', 'ai')" class="mt-0.5">
+                      <span class="text-[11px] ${f.ai?'text-amber-700 font-medium':'text-gray-300'} break-words">${escapeHtml(f.ai) || '<span class="italic">empty</span>'}</span>
+                    </label>
+                    <input id="rv-addr-${f.key}" value="${escapeHtml(value || '')}" class="w-full px-2.5 py-1.5 bg-surface-100 rounded-lg text-xs border-0">
+                  </div>`;
+                }).join('')}
+              </div>
+              ${recon && recon.ai_reasoning ? `<div class="mt-2 text-[11px] text-gray-500 bg-amber-50 rounded-lg px-3 py-2"><span class="font-semibold">AI rationale:</span> ${escapeHtml(recon.ai_reasoning)}</div>` : ''}
+              ${recon && recon.decision === 'auto_merged_high' ? `<div class="mt-1 text-[10px] text-green-600">AI suggestion already validated by Google geocoder — safe to accept.</div>` : ''}
+            `;
+          })()}
         </div>
+
+        ${lockerSnap ? `
+        <div>
+          <h4 class="font-semibold text-sm mb-2">Selected locker</h4>
+          <div class="bg-surface-100 rounded-xl p-3 text-xs">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <div class="font-semibold">${escapeHtml(lockerSnap.nearest_locker_name || lockerSnap.terminal_id || '-')}</div>
+                <div class="text-gray-500">${lockerSnap.terminal_id ? escapeHtml(lockerSnap.terminal_id) : ''}${lockerSnap.distance_km ? ' &middot; ' + escapeHtml(String(lockerSnap.distance_km)) + ' km' : ''}</div>
+              </div>
+              <div class="text-[10px] text-gray-400">${lockerSnap.locker_type || ''}</div>
+            </div>
+          </div>
+        </div>` : ''}
 
         <div>
           <div class="flex items-center justify-between mb-2"><h4 class="font-semibold text-sm">Line items</h4><button onclick="addReviewItem()" class="px-3 py-1 bg-surface-100 hover:bg-brand-100 rounded-full text-xs font-semibold">+ Add item</button></div>
@@ -1771,6 +1881,33 @@ function addReviewItem() {
   container.appendChild(row);
 }
 
+/**
+ * Radio handler for the address comparison grid.
+ * When the operator picks Entered / Geocoded / AI for a row, mirror that
+ * column's value into the right-hand input so save uses it.
+ */
+function onAddressPickChange(field, source) {
+  const row = document.querySelector(`[data-rv-addr-row="${field}"]`);
+  if (!row) return;
+  const radios = row.querySelectorAll(`input[type="radio"]`);
+  const labels = row.querySelectorAll('label');
+  // Refresh selected-style highlighting on all three labels.
+  labels.forEach((lbl) => {
+    const r = lbl.querySelector('input[type="radio"]');
+    lbl.classList.toggle('bg-gray-50', r && r.value !== 'ai' && r.checked);
+    lbl.classList.toggle('bg-amber-50', r && r.value === 'ai' && r.checked);
+  });
+  // Find the picked column's text and copy it into the editable input.
+  const picked = Array.from(radios).find((r) => r.checked);
+  if (!picked) return;
+  const span = picked.parentElement.querySelector('span');
+  const text = (span?.textContent || '').trim();
+  // Strip the placeholder "empty" italic text — that's not a real value.
+  const value = text === 'empty' ? '' : text;
+  const input = document.getElementById('rv-addr-' + field);
+  if (input) input.value = value;
+}
+
 async function submitReview(evaluationId) {
   const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const overrides = {};
@@ -1779,11 +1916,14 @@ async function submitReview(evaluationId) {
   if (v('rv-method')) overrides.delivery_method = v('rv-method');
 
   const addr = {};
-  ['street','suburb','city','province','postal'].forEach(k => {
+  // The new modal uses the structured field keys directly so no
+  // mapping is needed here. Each input mirrors whichever radio
+  // (entered / geocoded / AI) was selected; the operator can also
+  // type freely over the choice.
+  ['street_address','suburb','city','zone','code','country'].forEach(k => {
     const val = v('rv-addr-' + k);
     if (!val) return;
-    const key = k === 'street' ? 'street_address' : k === 'postal' ? 'postal_code' : k;
-    addr[key] = val;
+    addr[k] = val;
   });
   if (Object.keys(addr).length) overrides.delivery_address = addr;
 
