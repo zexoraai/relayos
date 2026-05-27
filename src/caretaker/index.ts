@@ -4,6 +4,7 @@ import { CustomerData } from '../pipeline/stages/customerData';
 import { LockersResolvedResult } from '../pipeline/stages/lockersResolved';
 import { PudoPayload } from '../pipeline/stages/payloadCreated';
 import { llmEvaluate, mergeVerdicts } from './llmEvaluator';
+import { executeLocationReconciled } from '../pipeline/stages/locationReconciled';
 
 const log = createChildLogger({ module: 'caretaker' });
 
@@ -14,6 +15,36 @@ function parseJsonArray(v: unknown): string[] {
     try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; }
   }
   return [];
+}
+
+/**
+ * Lightweight keyword match over the LLM evaluator's reasons + flags
+ * to decide whether its concern is address-shaped. Picked from the
+ * actual reasons we saw in production:
+ *   - "delivery address province does not match the postal code"
+ *   - "postal code mismatch in the delivery address"
+ *   - "province does not match the suburb and zone"
+ *   - "delivery method is inconsistent with the address"
+ *
+ * Conservative on purpose: if we cannot tell, we do nothing — the
+ * reconciler is not free.
+ */
+function isAddressConcern(reasons: string[], flags: string[]): boolean {
+  const haystack = [...reasons, ...flags].join(' | ').toLowerCase();
+  if (!haystack) return false;
+  const TOKENS = [
+    'address',
+    'postal',
+    'postcode',
+    'pincode',
+    'suburb',
+    'province',
+    'zone',
+    'city',
+    'locality',
+    'street',
+  ];
+  return TOKENS.some((t) => haystack.includes(t));
 }
 
 /**
@@ -436,6 +467,55 @@ export async function evaluate(input: CaretakerInput): Promise<CaretakerEvaluati
       }
     } else if (llmRes.skipped_reason) {
       log.debug({ reason: llmRes.skipped_reason }, 'LLM caretaker skipped');
+    }
+  }
+
+  // Address concern fast-path
+  //
+  // If the LLM evaluator flagged an address-shaped concern (postal/
+  // province/suburb mismatch, etc.) and we are about to send the
+  // evaluation to review, run an extra reconciliation pass with the
+  // LLM's reasons threaded through. Many of those reviews are auto-
+  // fixable: Google parsed a generic locality, the LLM noticed it
+  // didn't match the postal code, and the reconciler can produce a
+  // corrected DeliveryAddress that the operator one-clicks to accept.
+  //
+  // This runs even when the rules-based completeness check already
+  // passed — the original reconciler was completeness-gated and
+  // missed exactly these cases.
+  if (
+    finalVerdict === 'review' &&
+    llm.ran &&
+    isAddressConcern(llm.reasons, llm.flags)
+  ) {
+    try {
+      const concernResult = await executeLocationReconciled(
+        input.pipelineJobId,
+        input.tenantId,
+        { delivery_address: input.customerData.delivery_address },
+        { reasons: llm.reasons, flags: llm.flags },
+      );
+      if (concernResult.decision === 'auto_merged_high') {
+        // Reconciler converged on a clean address with high confidence;
+        // surface that on the evaluation summary so the operator can
+        // see the AI already worked it out before they open the modal.
+        mergedSummary = mergedSummary
+          ? `${mergedSummary}; AI reconciler proposed a corrected address (high conf).`
+          : 'AI reconciler proposed a corrected address (high conf).';
+      }
+      log.info(
+        {
+          pipelineJobId: input.pipelineJobId,
+          decision: concernResult.decision,
+          confidence: concernResult.confidence,
+        },
+        'Caretaker invoked address reconciler on LLM concern',
+      );
+    } catch (e: any) {
+      log.warn(
+        { pipelineJobId: input.pipelineJobId, error: e.message },
+        'Reconciler failed on caretaker LLM-concern path (non-fatal)',
+      );
     }
   }
 

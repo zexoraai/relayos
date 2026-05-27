@@ -61,18 +61,29 @@ export interface ReconciliationResult {
  *
  * Defensive: any thrown error short-circuits to source='unchanged' so the
  * pipeline always makes forward progress.
+ *
+ * Optional `llmConcern` argument: when the rules-based check passes but
+ * the caretaker LLM still flagged an address concern (postal mismatch,
+ * province / suburb inconsistency, etc.), we run reconciliation anyway
+ * with the LLM's reasoning passed through to the agent. This catches
+ * Google parses that *look* complete but contradict the entered text.
  */
 export async function executeLocationReconciled(
   jobId: string,
   tenantId: string,
   location: ResolvedLocation,
+  llmConcern?: { reasons: string[]; flags: string[] },
 ): Promise<ReconciliationResult> {
   const db = getDb();
   const original = location.delivery_address;
   const missingBefore = computeMissing(original);
 
-  // Cheap exit: nothing to reconcile.
-  if (missingBefore.length === 0) {
+  // Cheap exit: nothing to reconcile AND no LLM concern means we have
+  // nothing useful to do here. When the LLM flagged a concern though,
+  // we keep going — its observation may indicate Google parsed the
+  // address into the wrong locality / postal even though no fields
+  // are technically empty.
+  if (missingBefore.length === 0 && !llmConcern) {
     const result: ReconciliationResult = {
       decision: 'skipped',
       delivery_address: original,
@@ -118,15 +129,18 @@ export async function executeLocationReconciled(
     log.warn({ jobId, error: error.message }, 'Normalised re-geocode pass failed (non-fatal)');
   }
 
-  // Pass 2: AI reconciliation (only if still missing fields).
+  // Pass 2: AI reconciliation (only if still missing fields OR llmConcern
+  // raised an issue with what we already have).
   let stillMissing = computeMissing(working);
-  if (stillMissing.length > 0) {
+  const shouldRunAi = stillMissing.length > 0 || !!llmConcern;
+  if (shouldRunAi) {
     try {
       const ai = await aiReconcile({
         tenantId,
         enteredAddress: original.entered_address,
         partial: working,
         missing: stillMissing,
+        llmConcern,
       });
       aiUsed = true;
       aiReasoning = ai.reasoning;
@@ -333,16 +347,27 @@ async function aiReconcile(args: {
   enteredAddress: string;
   partial: DeliveryAddress;
   missing: VitalField[];
+  llmConcern?: { reasons: string[]; flags: string[] };
 }): Promise<{ suggestion: Partial<DeliveryAddress>; reasoning: string; confidence: number }> {
-  const sys =
+  const baseSys =
     'You are a South African address reconciliation agent. The user supplied a free-text shipping ' +
-    'address. A geocoder returned a partial structured result with missing fields. ' +
-    'Your job is to reconstruct the address fields the geocoder dropped, using ONLY the user-entered ' +
-    'address, the partial geocode, and your knowledge of South African localities and postal codes. ' +
-    'Never invent a postal code if you are not sure. If the entered address is too ambiguous to ' +
-    'recover a field, leave it blank and lower your confidence. Respond strictly as JSON matching ' +
-    'this shape: { "street_address": "", "suburb": "", "city": "", "zone": "", "code": "", ' +
-    '"country": "", "confidence": 0.0, "reasoning": "" }. Confidence is 0..1.';
+    'address. A geocoder returned a partial structured result with missing or possibly mismatched ' +
+    'fields. Your job is to reconstruct the address fields the geocoder dropped or got wrong, using ' +
+    'ONLY the user-entered address, the partial geocode, and your knowledge of South African ' +
+    'localities and postal codes. Never invent a postal code if you are not sure. If the entered ' +
+    'address is too ambiguous to recover a field, leave it blank and lower your confidence. Respond ' +
+    'strictly as JSON matching this shape: { "street_address": "", "suburb": "", "city": "", ' +
+    '"zone": "", "code": "", "country": "", "confidence": 0.0, "reasoning": "" }. Confidence is 0..1.';
+
+  const concernSys = args.llmConcern
+    ? '\n\nA secondary AI evaluator already flagged the following concerns about this address. ' +
+      'Use these to focus your correction — the geocoder may have parsed the wrong locality even ' +
+      "if its result looks 'complete'.\n" +
+      `Concerns: ${args.llmConcern.reasons.join(' | ')}\n` +
+      `Flags: ${args.llmConcern.flags.join(', ')}`
+    : '';
+
+  const sys = baseSys + concernSys;
 
   const user =
     `Entered address: "${args.enteredAddress}"\n` +
@@ -356,7 +381,9 @@ async function aiReconcile(args: {
       lat: args.partial.lat,
       lng: args.partial.lng,
     })}\n` +
-    `Missing fields the geocoder dropped: ${args.missing.join(', ')}\n` +
+    (args.missing.length
+      ? `Missing fields the geocoder dropped: ${args.missing.join(', ')}\n`
+      : `No fields are blank, but the LLM evaluator flagged inconsistencies — recheck every field for accuracy.\n`) +
     `Reconstruct the address fields. Country is South Africa unless the entered address says otherwise.`;
 
   const { data } = await chatCompletionValidated({
