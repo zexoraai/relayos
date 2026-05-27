@@ -142,4 +142,10 @@ export const REQUEST_BODIES: Record<string, unknown> = {
   'POST /packer/orders/:id/mark-packed': { note: 'verification-test' },
   'POST /packer/orders/:id/mark-dropped-off': { note: 'verification-test' },
   'POST /packer/orders/:id/revert': {},
+
+  // packersRoutes.ts (independent-packer linkage)
+  'POST /packers/invites': { email: 'verify@example.com', load_weight: 1 },
+  'POST /packers/invites/:id/revoke': {},
+  'PUT /packers/links/:id': { load_weight: 2 },
+  'POST /packers/links/:id/unlink': { reason: 'verification' },
 };

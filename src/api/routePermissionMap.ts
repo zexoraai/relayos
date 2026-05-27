@@ -297,6 +297,15 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'packerRoutes', method: 'POST', path: '/packer/orders/:id/revert', permission: PERMISSIONS.ORDERS.MANAGE },
 
   // ------------------------------------------------------------------
+  // packersRoutes.ts (mounted at /packers) — independent-packer linkage
+  // ------------------------------------------------------------------
+  { router: 'packersRoutes', method: 'GET', path: '/packers/links', permission: PERMISSIONS.PACKERS.VIEW },
+  { router: 'packersRoutes', method: 'POST', path: '/packers/invites', permission: PERMISSIONS.PACKERS.INVITE },
+  { router: 'packersRoutes', method: 'POST', path: '/packers/invites/:id/revoke', permission: PERMISSIONS.PACKERS.INVITE },
+  { router: 'packersRoutes', method: 'PUT', path: '/packers/links/:id', permission: PERMISSIONS.PACKERS.MANAGE },
+  { router: 'packersRoutes', method: 'POST', path: '/packers/links/:id/unlink', permission: PERMISSIONS.PACKERS.MANAGE },
+
+  // ------------------------------------------------------------------
   // ordersRoutes.ts (mounted at /orders)
   // ------------------------------------------------------------------
   { router: 'ordersRoutes', method: 'GET', path: '/orders', permission: PERMISSIONS.ORDERS.VIEW },

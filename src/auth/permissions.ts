@@ -78,6 +78,11 @@ export const PERMISSIONS = {
     INVITE: 'users.invite',
     MANAGE: 'users.manage',
   },
+  PACKERS: {
+    VIEW: 'packers.view',
+    INVITE: 'packers.invite',
+    MANAGE: 'packers.manage',  // pause / unlink / weight
+  },
   SYSTEM: {
     HEALTH_VIEW: 'health.view',
     DLQ_VIEW: 'dlq.view',
@@ -133,6 +138,7 @@ export const ROLE_PRESETS: Record<string, string[]> = {
     'agents.view',
     'agents.runs.view',
     'agents.usage.view',
+    'packers.*',
     'health.view',
     'dlq.view',
     'dlq.manage',
