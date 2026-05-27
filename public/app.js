@@ -2788,7 +2788,7 @@ async function renderWhatsApp() {
     api('GET', '/whatsapp/business-settings'),
     api('GET', '/whatsapp/templates'),
     api('GET', '/whatsapp/event-types'),
-    api('GET', '/whatsapp/messages?limit=30'),
+    api('GET', '/whatsapp/messages?limit=30&exclude_purposes=chatbot_reply,chatbot_inbound'),
   ]);
   const settings = settingsRes && settingsRes.success ? settingsRes.data : { configured: false };
   const biz = bizRes && bizRes.success ? bizRes.data : { configured: false };

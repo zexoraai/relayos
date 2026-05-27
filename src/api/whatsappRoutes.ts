@@ -573,17 +573,37 @@ router.post('/templates/meta/import-all', requirePermission('whatsapp.templates.
 
 /**
  * GET /whatsapp/messages - recent message log.
+ *
+ * Query params:
+ *   - limit              : 1..500 (default 100)
+ *   - exclude_purposes   : comma-separated purpose values to filter out
+ *                          (e.g. "chatbot_reply,chatbot_inbound" so the
+ *                          WhatsApp tab can show transactional traffic
+ *                          only — chatbot two-way conversations live in
+ *                          the Inbox tab)
+ *   - purposes           : comma-separated purpose values to include
+ *                          (mutually exclusive with exclude_purposes;
+ *                          if both are passed, exclude_purposes wins)
+ *   - direction          : 'inbound' | 'outbound'
  */
 router.get('/messages', requirePermission('whatsapp.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
-  const { limit = '100' } = req.query;
+  const limit = Math.max(1, Math.min(parseInt((req.query.limit as string) || '100', 10) || 100, 500));
+  const excludeRaw = (req.query.exclude_purposes as string | undefined) || '';
+  const includeRaw = (req.query.purposes as string | undefined) || '';
+  const direction = (req.query.direction as string | undefined) || '';
 
-  const rows = await db('whatsapp_messages')
-    .where({ tenant_id: tenantId })
-    .orderBy('created_at', 'desc')
-    .limit(parseInt(limit as string, 10));
+  const splitList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+  const excludePurposes = splitList(excludeRaw);
+  const includePurposes = splitList(includeRaw);
 
+  const q = db('whatsapp_messages').where({ tenant_id: tenantId });
+  if (direction === 'inbound' || direction === 'outbound') q.where('direction', direction);
+  if (excludePurposes.length) q.whereNotIn('purpose', excludePurposes);
+  else if (includePurposes.length) q.whereIn('purpose', includePurposes);
+
+  const rows = await q.orderBy('created_at', 'desc').limit(limit);
   return res.status(200).json({ success: true, data: rows });
 });
 
