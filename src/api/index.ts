@@ -21,6 +21,7 @@ import usageRoutes from './usageRoutes';
 import agentRunsRoutes from './agentRunsRoutes';
 import usersRoutes from './usersRoutes';
 import packerRoutes from './packerRoutes';
+import ordersRoutes from './ordersRoutes';
 import chatbotSettingsRoutes from './chatbotSettingsRoutes';
 import marketingRoutes from './marketingRoutes';
 import manualRoutes from './manualRoutes';
@@ -89,6 +90,7 @@ export function createApiServer(): express.Application {
   app.use('/agent-runs', agentRunsRoutes);
   app.use('/users', usersRoutes);
   app.use('/packer', packerRoutes);
+  app.use('/orders', ordersRoutes);
   app.use('/chatbot-settings', chatbotSettingsRoutes);
   app.use('/marketing', marketingRoutes);
   app.use('/manual', manualRoutes);

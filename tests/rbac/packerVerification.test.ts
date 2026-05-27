@@ -292,6 +292,7 @@ import usageRoutes from '../../src/api/usageRoutes';
 import agentRunsRoutes from '../../src/api/agentRunsRoutes';
 import usersRoutes from '../../src/api/usersRoutes';
 import packerRoutes from '../../src/api/packerRoutes';
+import ordersRoutes from '../../src/api/ordersRoutes';
 import chatbotSettingsRoutes from '../../src/api/chatbotSettingsRoutes';
 import marketingRoutes from '../../src/api/marketingRoutes';
 import manualRoutes from '../../src/api/manualRoutes';
@@ -313,6 +314,7 @@ const ROUTER_MOUNTS: Record<string, { mountPath: string; router: express.Router 
   agentRunsRoutes:       { mountPath: '/agent-runs',       router: agentRunsRoutes },
   usersRoutes:           { mountPath: '/users',            router: usersRoutes },
   packerRoutes:          { mountPath: '/packer',           router: packerRoutes },
+  ordersRoutes:          { mountPath: '/orders',           router: ordersRoutes },
   chatbotSettingsRoutes: { mountPath: '/chatbot-settings', router: chatbotSettingsRoutes },
   marketingRoutes:       { mountPath: '/marketing',        router: marketingRoutes },
   manualRoutes:          { mountPath: '/manual',           router: manualRoutes },

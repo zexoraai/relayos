@@ -292,4 +292,10 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'packerRoutes', method: 'POST', path: '/packer/orders/:id/mark-packed', permission: PERMISSIONS.ORDERS.MANAGE },
   { router: 'packerRoutes', method: 'POST', path: '/packer/orders/:id/mark-dropped-off', permission: PERMISSIONS.ORDERS.MANAGE },
   { router: 'packerRoutes', method: 'POST', path: '/packer/orders/:id/revert', permission: PERMISSIONS.ORDERS.MANAGE },
+
+  // ------------------------------------------------------------------
+  // ordersRoutes.ts (mounted at /orders)
+  // ------------------------------------------------------------------
+  { router: 'ordersRoutes', method: 'GET', path: '/orders', permission: PERMISSIONS.ORDERS.VIEW },
+  { router: 'ordersRoutes', method: 'GET', path: '/orders/:id', permission: PERMISSIONS.ORDERS.VIEW },
 ];
