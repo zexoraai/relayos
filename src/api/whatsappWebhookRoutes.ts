@@ -151,9 +151,52 @@ async function handleStatusUpdate(tenantId: string, s: any): Promise<void> {
   const status = s?.status; // sent | delivered | read | failed
   if (!waId || !status) return;
 
+  // When Meta marks a message as 'failed', the webhook payload carries
+  // an `errors` array with code/title/message and a top-level
+  // `error_data.details`. Without surfacing that we end up with rows
+  // that say `status=failed` but `last_error=''` — which is exactly
+  // the silent-failure pattern we hit on outbound order_confirmed /
+  // order_in_transit / order_delivered messages today.
+  let lastError: string | null = null;
+  let metaPatch: any = null;
+  if (status === 'failed') {
+    const errs: any[] = Array.isArray(s.errors) ? s.errors : [];
+    if (errs.length) {
+      const parts = errs.map((e: any) => {
+        const bits = [];
+        if (e.code !== undefined) bits.push(`code=${e.code}`);
+        if (e.title) bits.push(e.title);
+        const msg = e.message || e?.error_data?.details;
+        if (msg) bits.push(msg);
+        return bits.join(' | ');
+      });
+      lastError = parts.join(' ; ').slice(0, 500);
+      metaPatch = { status_errors: errs };
+    } else if (s?.error_data?.details) {
+      lastError = String(s.error_data.details).slice(0, 500);
+    }
+  }
+
+  const update: any = { status, updated_at: new Date() };
+  if (lastError) update.last_error = lastError;
+
+  // Stash the raw status payload so a future operator can audit exactly
+  // what Meta said. meta is jsonb; we shallow-merge with a fresh field
+  // namespaced as `last_status_*` so we don't clobber template_id etc.
+  if (metaPatch || status) {
+    update.meta = db.raw(
+      `coalesce(meta, '{}'::jsonb) || ?::jsonb`,
+      [JSON.stringify({
+        last_status: status,
+        last_status_at: new Date().toISOString(),
+        ...(metaPatch || {}),
+      })],
+    );
+  }
+
   await db('whatsapp_messages')
     .where({ tenant_id: tenantId, wa_message_id: waId })
-    .update({ status, updated_at: new Date() });
+    .update(update);
 }
 
 export default router;

@@ -83,6 +83,67 @@ export function validateTemplateName(name: string): { ok: boolean; error?: strin
 }
 
 /**
+ * List every template that lives on the WhatsApp Business Account.
+ *
+ * Used by the operator to "import" approved templates from Meta into our
+ * local whatsapp_templates table. Without this they would have to retype
+ * the template name + language + variable order, and any mismatch with
+ * Meta's actual record causes the send to fail with the silent
+ * "structure does not match" error code.
+ *
+ * Meta returns up to 25 templates per page by default; we follow the
+ * paging cursor and stitch the full list into one array so the caller
+ * doesn't have to handle paging.
+ */
+export interface MetaTemplateListItem {
+  id: string;
+  name: string;
+  language: string;
+  status: MetaTemplateStatus;
+  category: MetaTemplateCategory;
+  components: any[];
+}
+
+export async function listMetaTemplates(creds: MetaCredentials): Promise<MetaTemplateListItem[]> {
+  const apiVersion = creds.apiVersion || 'v20.0';
+  const out: MetaTemplateListItem[] = [];
+  let path: string | null =
+    `/${apiVersion}/${creds.businessAccountId}/message_templates` +
+    `?fields=id,name,status,category,language,components&limit=100`;
+
+  let pages = 0;
+  while (path && pages < 20) {
+    const r: any = await getJson('graph.facebook.com', path, creds.systemUserToken);
+    if (Array.isArray(r?.data)) {
+      for (const t of r.data) {
+        out.push({
+          id: t.id,
+          name: t.name,
+          language: t.language,
+          status: t.status,
+          category: t.category,
+          components: t.components || [],
+        });
+      }
+    }
+    // Meta's paging shape: `paging.next` is a full URL; convert to path.
+    const nextUrl: string | undefined = r?.paging?.next;
+    if (nextUrl) {
+      try {
+        const u = new URL(nextUrl);
+        path = u.pathname + (u.search || '');
+      } catch {
+        path = null;
+      }
+    } else {
+      path = null;
+    }
+    pages += 1;
+  }
+  return out;
+}
+
+/**
  * Submit a new template to Meta for approval.
  */
 export async function createMetaTemplate(

@@ -205,6 +205,9 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/business-settings', permission: PERMISSIONS.WHATSAPP.SETTINGS_MANAGE },
   { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/templates/:purpose/submit-to-meta', permission: PERMISSIONS.WHATSAPP.TEMPLATES_MANAGE },
   { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/templates/:purpose/sync-from-meta', permission: PERMISSIONS.WHATSAPP.TEMPLATES_MANAGE },
+  { router: 'whatsappRoutes', method: 'GET', path: '/whatsapp/templates/meta', permission: PERMISSIONS.WHATSAPP.TEMPLATES_MANAGE },
+  { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/templates/meta/import', permission: PERMISSIONS.WHATSAPP.TEMPLATES_MANAGE },
+  { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/templates/meta/import-all', permission: PERMISSIONS.WHATSAPP.TEMPLATES_MANAGE },
   { router: 'whatsappRoutes', method: 'GET', path: '/whatsapp/messages', permission: PERMISSIONS.WHATSAPP.VIEW },
   { router: 'whatsappRoutes', method: 'POST', path: '/whatsapp/test', permission: PERMISSIONS.WHATSAPP.SEND_TEST },
 

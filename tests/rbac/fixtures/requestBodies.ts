@@ -74,6 +74,8 @@ export const REQUEST_BODIES: Record<string, unknown> = {
   },
   'POST /whatsapp/templates/:purpose/submit-to-meta': {},
   'POST /whatsapp/templates/:purpose/sync-from-meta': {},
+  'POST /whatsapp/templates/meta/import': { meta_template_name: 'order_confirmed', language_code: 'en', purpose: 'order_confirmed', body_text: 'Hi {{1}}', variables: ['customer_name'] },
+  'POST /whatsapp/templates/meta/import-all': {},
   'POST /whatsapp/test': { to: '+27000000000' },
 
   // manualRoutes.ts
