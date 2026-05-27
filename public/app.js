@@ -1029,9 +1029,23 @@ async function renderFulfillment() {
     html += `<div class="space-y-2">`;
     fulfillmentJobs.forEach((j,i) => {
       const m = (j.milestone||'pending').replace(/_/g,' ');
+      // Shopify-fulfilled pill: green check on rows where Shopify has been
+      // marked fulfilled (typically once milestone=in_transit), amber dot
+      // when not. Skips entirely on cancelled/failed terminal jobs because
+      // Shopify state there is "cancelled" or n/a.
+      let shopifyPill = '';
+      const terminal = j.milestone === 'cancelled' || j.milestone === 'failed';
+      if (!terminal) {
+        if (j.shopify_fulfilled) {
+          const ts = j.shopify_fulfilled_at ? new Date(j.shopify_fulfilled_at).toLocaleString() : '';
+          shopifyPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="Shopify fulfillment created${ts ? ' on ' + escapeHtml(ts) : ''}">Shopify &#10003;</span>`;
+        } else {
+          shopifyPill = `<span class="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="Shopify fulfillment not yet created (auto-fires when milestone=in_transit)">Shopify pending</span>`;
+        }
+      }
       html += `<div onclick="showFulfillmentDetail(${i})" class="flex items-center justify-between p-4 rounded-2xl border border-gray-100 hover:border-brand-300 cursor-pointer transition-all">`;
       html += `<div><div class="text-sm font-semibold">${j.waybill||'-'}</div><div class="text-xs text-gray-400">${j.customer_name||''} - ${j.delivery_method||''}</div></div>`;
-      html += `<div class="flex items-center gap-3">${badge(j.milestone==='delivered'?'completed':j.milestone==='cancelled'||j.milestone==='failed'?'failed':'processing', m)}<span class="text-xs text-gray-400">${j.poll_count||0} polls</span></div>`;
+      html += `<div class="flex items-center gap-2 flex-wrap justify-end">${shopifyPill}${badge(j.milestone==='delivered'?'completed':j.milestone==='cancelled'||j.milestone==='failed'?'failed':'processing', m)}<span class="text-xs text-gray-400">${j.poll_count||0} polls</span></div>`;
       html += `</div>`;
     });
     html += `</div>`;
@@ -1041,9 +1055,13 @@ async function renderFulfillment() {
 }
 async function showFulfillmentDetail(i) {
   const j = fulfillmentJobs[i];
-  const { data } = await api('GET', '/fulfillment/jobs/' + j.id);
+  const [{ data }, { data: notifData }] = await Promise.all([
+    api('GET', '/fulfillment/jobs/' + j.id),
+    api('GET', '/fulfillment/jobs/' + j.id + '/notifications'),
+  ]);
   if (!data.success) return;
   const job = data.data.job; const events = data.data.events||[];
+  const notifications = (notifData && notifData.success ? notifData.data.notifications : []) || [];
   let html = `<div class="bg-white rounded-3xl shadow-card p-6">`;
   const isCancelled = job.status === 'cancelled' || job.milestone === 'cancelled';
   const cancelBtn = isCancelled
@@ -1056,6 +1074,60 @@ async function showFulfillmentDetail(i) {
   html += `<div class="bg-surface-100 rounded-xl p-3"><div class="text-[10px] text-gray-400 uppercase">Status</div><div class="text-sm font-bold capitalize">${(job.milestone||'pending').replace(/_/g,' ')}</div></div>`;
   html += `<div class="bg-surface-100 rounded-xl p-3"><div class="text-[10px] text-gray-400 uppercase">Polls</div><div class="text-sm font-bold">${job.poll_count||0}</div></div>`;
   html += `</div>`;
+
+  // Shopify fulfillment state — surfaced explicitly so the operator doesn't
+  // have to flip to the Shopify admin to know whether the order has been
+  // marked fulfilled there. Auto-fires once milestone=in_transit.
+  const shopifyState = job.shopify_fulfilled
+    ? `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 text-green-600 text-[11px] font-semibold">&#10003; Fulfilled${job.shopify_fulfilled_at ? ' &middot; ' + escapeHtml(new Date(job.shopify_fulfilled_at).toLocaleString()) : ''}</span>`
+    : (isCancelled
+        ? `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-gray-500 text-[11px] font-semibold">N/A (cancelled)</span>`
+        : `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-[11px] font-semibold">Pending &middot; auto-fires at in_transit</span>`);
+  html += `<div class="flex items-center gap-3 mb-6 flex-wrap">`;
+  html += `<span class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Shopify</span>${shopifyState}`;
+  if (job.shopify_fulfillment_id) {
+    html += `<span class="text-[11px] text-gray-400 font-mono">id: ${escapeHtml(job.shopify_fulfillment_id)}</span>`;
+  }
+  if (job.shopify_fulfillment_status && job.shopify_fulfillment_status !== 'success') {
+    html += `<span class="text-[11px] text-gray-500">status: ${escapeHtml(job.shopify_fulfillment_status)}</span>`;
+  }
+  html += `</div>`;
+
+  // Customer notifications — every outbound WhatsApp tied to this order_id,
+  // so the operator can confirm each milestone notification actually went
+  // out (purpose, status, body, error, Meta wa_message_id).
+  html += `<h4 class="font-semibold text-sm mb-3">Customer notifications</h4>`;
+  if (notifications.length === 0) {
+    html += `<p class="text-xs text-gray-400 mb-6">No WhatsApp notifications dispatched yet for this order.</p>`;
+  } else {
+    html += `<div class="space-y-2 mb-6">`;
+    notifications.forEach((n) => {
+      const statusColor = n.status === 'sent' || n.status === 'delivered' || n.status === 'read'
+        ? 'bg-green-50 text-green-600'
+        : n.status === 'failed'
+          ? 'bg-red-50 text-red-500'
+          : 'bg-amber-50 text-amber-700';
+      const purposeLabel = (n.purpose || 'unknown').replace(/_/g, ' ');
+      const ts = n.created_at ? new Date(n.created_at).toLocaleString() : '';
+      const body = (n.body || '').length > 240 ? (n.body || '').slice(0, 240) + '…' : (n.body || '');
+      html += `<div class="border border-gray-100 rounded-xl p-3">`;
+      html += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
+      html += `<div class="flex items-center gap-2 min-w-0">`;
+      html += `<span class="text-xs font-semibold capitalize">${escapeHtml(purposeLabel)}</span>`;
+      html += `<span class="text-[10px] text-gray-400">to ${escapeHtml(n.phone_to || '-')}</span>`;
+      html += `</div>`;
+      html += `<div class="flex items-center gap-2">`;
+      html += `<span class="text-[10px] ${statusColor} px-2 py-0.5 rounded-full font-medium uppercase">${escapeHtml(n.status || '-')}</span>`;
+      html += `<span class="text-[10px] text-gray-400">${escapeHtml(ts)}</span>`;
+      html += `</div></div>`;
+      if (body) html += `<div class="text-[11px] text-gray-600 whitespace-pre-wrap">${escapeHtml(body)}</div>`;
+      if (n.last_error) html += `<div class="text-[11px] text-red-500 mt-1"><span class="font-semibold">Error:</span> ${escapeHtml(n.last_error)}</div>`;
+      if (n.wa_message_id) html += `<div class="text-[10px] text-gray-300 font-mono mt-1">${escapeHtml(n.wa_message_id)}</div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
   if (events.length) {
     html += `<h4 class="font-semibold text-sm mb-3">Tracking Events</h4><div class="space-y-2">`;
     events.forEach(ev => {

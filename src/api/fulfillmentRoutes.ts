@@ -66,6 +66,38 @@ router.get('/jobs/:id', requirePermission('fulfillment.view'), async (req: Authe
   return res.status(200).json({ success: true, data: { job, stages, events } });
 });
 
+// GET /fulfillment/jobs/:id/notifications
+//
+// Returns the whatsapp_messages log for the order behind this fulfillment job
+// so the operator can see, on the Fulfillment detail panel, whether each
+// milestone notification (order_in_transit, order_at_locker, order_delivered,
+// etc.) actually went out, the rendered body, the Meta wa_message_id, the
+// status (queued | sent | delivered | read | failed) and any last_error.
+//
+// Scoped to the tenant of the requester. Joins through the order_id stored
+// on the fulfillment_job. Only outbound messages are returned (we don't
+// surface inbound chatbot replies on this view).
+router.get('/jobs/:id/notifications', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const jobId = req.params.id as string;
+
+  const job = await db('fulfillment_jobs').where({ id: jobId, tenant_id: tenantId }).first('id', 'order_id');
+  if (!job) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Fulfillment job not found' } });
+  }
+  if (!job.order_id) {
+    return res.status(200).json({ success: true, data: { notifications: [] } });
+  }
+
+  const notifications = await db('whatsapp_messages')
+    .where({ tenant_id: tenantId, order_id: job.order_id, direction: 'outbound' })
+    .orderBy('created_at', 'asc')
+    .select('id', 'purpose', 'phone_to', 'status', 'wa_message_id', 'body', 'last_error', 'created_at', 'updated_at');
+
+  return res.status(200).json({ success: true, data: { notifications } });
+});
+
 // GET /fulfillment/stats
 router.get('/stats', requirePermission('fulfillment.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();

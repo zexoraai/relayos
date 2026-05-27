@@ -121,6 +121,7 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   // ------------------------------------------------------------------
   { router: 'fulfillmentRoutes', method: 'GET', path: '/fulfillment/jobs', permission: PERMISSIONS.FULFILLMENT.VIEW },
   { router: 'fulfillmentRoutes', method: 'GET', path: '/fulfillment/jobs/:id', permission: PERMISSIONS.FULFILLMENT.VIEW },
+  { router: 'fulfillmentRoutes', method: 'GET', path: '/fulfillment/jobs/:id/notifications', permission: PERMISSIONS.FULFILLMENT.VIEW },
   { router: 'fulfillmentRoutes', method: 'GET', path: '/fulfillment/stats', permission: PERMISSIONS.FULFILLMENT.VIEW },
   { router: 'fulfillmentRoutes', method: 'POST', path: '/fulfillment/poll/:id', permission: PERMISSIONS.FULFILLMENT.POLL },
   { router: 'fulfillmentRoutes', method: 'POST', path: '/fulfillment/jobs/:id/cancel', permission: PERMISSIONS.FULFILLMENT.CANCEL },
