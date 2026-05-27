@@ -108,6 +108,45 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   },
 
   // ------------------------------------------------------------------
+  // packerAuthRoutes.ts (mounted at /packer-auth) — packer identity, separate JWT audience
+  // ------------------------------------------------------------------
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/signup',
+    permission: 'auth-only',
+    justification: 'public packer registration — runs before any packer JWT exists',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/login',
+    permission: 'auth-only',
+    justification: 'public token issuance for packers — caller has no JWT yet',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/accept',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware (separate JWT audience), not by tenant permissions',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'GET',
+    path: '/packer-auth/me',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware (separate JWT audience), not by tenant permissions',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/logout',
+    permission: 'auth-only',
+    justification: 'stateless logout — any holder of a packer JWT may invoke',
+  },
+
+  // ------------------------------------------------------------------
   // pipelineRoutes.ts (mounted at /pipeline)
   // ------------------------------------------------------------------
   { router: 'pipelineRoutes', method: 'GET', path: '/pipeline/jobs', permission: PERMISSIONS.PIPELINE.VIEW },

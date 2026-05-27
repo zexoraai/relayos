@@ -61,6 +61,7 @@ const PUBLIC_PERMISSIONS_JS = path.resolve(
  */
 const ALLOWLIST: ReadonlySet<string> = new Set([
   'authRoutes.ts',
+  'packerAuthRoutes.ts',
   'whatsappWebhookRoutes.ts',
   'shopifyWebhookRoutes.ts',
   'referenceRoutes.ts',

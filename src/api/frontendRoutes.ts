@@ -13,10 +13,22 @@ const router = Router();
 
 const distIndex = path.join(__dirname, '../../public/dist/index.html');
 const legacyIndex = path.join(__dirname, '../../public/legacy.html');
+const packerSignupHtml = path.join(__dirname, '../../public/packer-signup.html');
+const packerLoginHtml = path.join(__dirname, '../../public/packer-login.html');
 
 // Legacy fallback
 router.get('/legacy.html', (_req: Request, res: Response) => {
   res.sendFile(legacyIndex);
+});
+
+// Independent-packer pages — separate UI from the tenant dashboard so
+// the two identity systems never visually collide. The HTML files are
+// self-contained (Tailwind via CDN) and POST to /packer-auth/*.
+router.get('/packer-signup', (_req: Request, res: Response) => {
+  res.sendFile(packerSignupHtml);
+});
+router.get('/packer-login', (_req: Request, res: Response) => {
+  res.sendFile(packerLoginHtml);
 });
 
 // SPA catch-all: any route that doesn't match an API or static file → serve the SPA shell

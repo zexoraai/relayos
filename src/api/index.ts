@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import rateLimit from 'express-rate-limit';
 import authRoutes from './authRoutes';
+import packerAuthRoutes from './packerAuthRoutes';
 import onboardingRoutes from './onboardingRoutes';
 import referenceRoutes from './referenceRoutes';
 import healthRoutes from './healthRoutes';
@@ -72,6 +73,7 @@ export function createApiServer(): express.Application {
 
   // API Routes
   app.use('/auth', authLimiter, authRoutes);
+  app.use('/packer-auth', authLimiter, packerAuthRoutes);
   app.use('/onboarding', onboardingRoutes);
   app.use('/reference', referenceRoutes);
   app.use('/health', healthRoutes);

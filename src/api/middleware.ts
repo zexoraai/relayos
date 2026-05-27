@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyToken, TenantPayload } from '../auth';
+import { verifyPackerToken, PackerPayload } from '../packerAuth';
 import { hasPermission, hasAnyPermission } from '../auth/permissions';
 import { createChildLogger } from '../observability/logger';
 
@@ -7,6 +8,16 @@ const log = createChildLogger({ module: 'api-middleware' });
 
 export interface AuthenticatedRequest extends Request {
   tenant?: TenantPayload;
+}
+
+/**
+ * Same Bearer-token shape as tenant requests, but the JWT must carry the
+ * packer audience claim. A tenant token will fail verification here (and
+ * vice versa via authMiddleware) because of the audience mismatch built
+ * into generatePackerToken / verifyPackerToken.
+ */
+export interface PackerAuthenticatedRequest extends Request {
+  packer?: PackerPayload;
 }
 
 export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
@@ -31,6 +42,36 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
     res.status(401).json({
       success: false,
       error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token' },
+    });
+  }
+}
+
+/**
+ * Auth middleware for packer-only routes. Packers carry a JWT issued
+ * by generatePackerToken (audience='relayos-packer') and these are the
+ * only tokens accepted here. Tenant tokens get rejected with the same
+ * 401 INVALID_TOKEN as a malformed/expired packer token to avoid
+ * leaking which audience the route is gated to.
+ */
+export function packerAuthMiddleware(req: PackerAuthenticatedRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({
+      success: false,
+      error: { code: 'UNAUTHORIZED', message: 'Packer authentication required' },
+    });
+    return;
+  }
+  const token = authHeader.substring(7);
+  try {
+    const payload = verifyPackerToken(token);
+    req.packer = payload;
+    next();
+  } catch (error: any) {
+    log.debug({ error: error.message }, 'Packer token verification failed');
+    res.status(401).json({
+      success: false,
+      error: { code: 'INVALID_TOKEN', message: 'Invalid or expired packer token' },
     });
   }
 }
