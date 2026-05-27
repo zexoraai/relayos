@@ -2774,7 +2774,16 @@ async function saveSettingsCollection() {
 }
 
 async function renderWhatsApp() {
-  const [{ data: settingsRes }, { data: bizRes }, { data: tplRes }, { data: eventsRes }, { data: msgRes }] = await Promise.all([
+  // Fire all four list endpoints in parallel. The Meta list is the
+  // authoritative one — we fall back to local templates when the
+  // Business Settings haven't been configured yet.
+  const [
+    { data: settingsRes },
+    { data: bizRes },
+    { data: tplRes },
+    { data: eventsRes },
+    { data: msgRes },
+  ] = await Promise.all([
     api('GET', '/whatsapp/settings'),
     api('GET', '/whatsapp/business-settings'),
     api('GET', '/whatsapp/templates'),
@@ -2783,10 +2792,26 @@ async function renderWhatsApp() {
   ]);
   const settings = settingsRes && settingsRes.success ? settingsRes.data : { configured: false };
   const biz = bizRes && bizRes.success ? bizRes.data : { configured: false };
-  const templates = tplRes && tplRes.success ? tplRes.data : [];
+  const localTemplates = tplRes && tplRes.success ? tplRes.data : [];
   const eventTypes = eventsRes && eventsRes.success ? eventsRes.data : [];
   const messages = msgRes && msgRes.success ? msgRes.data : [];
   window._waEventTypes = eventTypes;
+
+  // Meta list is gated on whatsapp.templates.manage AND on the tenant
+  // having business credentials — pull only when both are met to avoid
+  // a noisy NO_BUSINESS error on first paint.
+  let metaRows = [];
+  let metaLocalByName = {};
+  let metaError = null;
+  if (biz.configured) {
+    const { data: metaRes } = await api('GET', '/whatsapp/templates/meta');
+    if (metaRes && metaRes.success) {
+      metaRows = metaRes.data.rows || [];
+      metaLocalByName = metaRes.data.local_by_template_name || {};
+    } else {
+      metaError = metaRes?.error?.message || 'Failed to fetch from Meta';
+    }
+  }
 
   let html = `<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">`;
 
@@ -2805,7 +2830,7 @@ async function renderWhatsApp() {
 
   // Business Account settings (for Meta template management)
   html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-1">Business Account (Templates)</h3>`;
-  html += `<p class="text-xs text-gray-400 mb-4">Required to submit templates to Meta for approval. Uses a System User token.</p>`;
+  html += `<p class="text-xs text-gray-400 mb-4">Required to read and import templates from Meta. Uses a System User token with the <code class="bg-surface-100 px-1 rounded">whatsapp_business_management</code> scope.</p>`;
   if (biz.configured) html += `<div class="flex items-center gap-2 mb-4"><span class="w-2 h-2 rounded-full bg-green-400"></span><span class="text-sm text-green-600 font-medium">Connected</span><span class="text-xs text-gray-400 ml-2">${biz.business_account_id||''}</span></div>`;
   html += `<div class="space-y-3">`;
   html += `<div><label class="block text-xs text-gray-400 mb-1">Business Account ID</label><input id="wa-biz-id" value="${biz.business_account_id||''}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
@@ -2814,59 +2839,122 @@ async function renderWhatsApp() {
 
   html += `</div>`; // grid
 
-  // Templates section
+  // ============================================================
+  // Meta-approved templates — primary section
+  // ============================================================
   html += `<div class="bg-white rounded-3xl shadow-card p-6 mt-6">`;
-  html += `<div class="flex items-center justify-between mb-4"><h3 class="font-bold text-base">Templates (${templates.length})</h3><button onclick="showCreateTemplateModal()" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">New Template</button></div>`;
+  html += `<div class="flex items-center justify-between mb-4 flex-wrap gap-2">`;
+  html += `<div><h3 class="font-bold text-base">Meta Templates</h3>`;
+  html += `<p class="text-xs text-gray-400">The canonical list from your WhatsApp Business Account. Only APPROVED templates can deliver outside the 24h customer window.</p></div>`;
+  html += `<div class="flex gap-2 items-center flex-wrap">`;
+  // Status filter
+  if (biz.configured && metaRows.length) {
+    const statuses = [
+      ['APPROVED', 'green'], ['PENDING', 'amber'], ['REJECTED', 'red'],
+      ['PAUSED', 'gray'], ['DISABLED', 'gray'], ['DRAFT', 'gray'],
+    ];
+    const selected = window._waMetaFilter || 'APPROVED';
+    html += `<select onchange="setWaMetaFilter(this.value)" class="text-xs px-3 py-1.5 bg-surface-100 rounded-xl border-0">`;
+    html += `<option value="APPROVED"${selected==='APPROVED'?' selected':''}>Approved only</option>`;
+    html += `<option value="ALL"${selected==='ALL'?' selected':''}>Show all statuses</option>`;
+    statuses.slice(1).forEach(([s]) => { html += `<option value="${s}"${selected===s?' selected':''}>${s}</option>`; });
+    html += `</select>`;
+    html += `<button onclick="syncAllMetaTemplates()" class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold rounded-full text-xs">Import all approved</button>`;
+    html += `<button onclick="renderWhatsApp()" class="text-[11px] text-gray-400 hover:text-gray-600">refresh</button>`;
+  }
+  html += `</div></div>`;
 
-  if (templates.length === 0) {
-    html += emptyState('No templates yet', 'Create a template, map it to events, optionally submit to Meta for approval.');
+  if (!biz.configured) {
+    html += `<div class="bg-amber-50 text-amber-700 rounded-xl p-4 text-sm">Configure the Business Account credentials above to load templates from Meta. Without it we can only show local drafts.</div>`;
+  } else if (metaError) {
+    html += `<div class="bg-red-50 text-red-600 rounded-xl p-4 text-sm">Could not fetch from Meta: ${escapeHtml(metaError)}</div>`;
+  } else if (metaRows.length === 0) {
+    html += emptyState('No templates on Meta yet', 'Once you submit a template (or someone on your team does in Meta Business Manager), it will appear here.');
   } else {
-    html += `<div class="space-y-3">`;
-    templates.forEach(t => {
-      const events = Array.isArray(t.event_types) ? t.event_types : [];
-      const metaStatus = t.meta_status || 'DRAFT';
-      const metaCls = metaStatus === 'APPROVED' ? 'completed' : metaStatus === 'REJECTED' ? 'failed' : metaStatus === 'PENDING' ? 'processing' : 'pending';
-      html += `<div class="p-4 rounded-2xl border border-gray-100 hover:bg-surface-100 transition-all">`;
-      html += `<div class="flex items-center justify-between mb-2 gap-3 flex-wrap">`;
-      html += `<div class="flex items-center gap-2 flex-wrap"><span class="text-sm font-semibold">${t.purpose}</span>`;
-      html += `<span class="text-[10px] text-gray-400 uppercase">${t.language_code||'en'}</span>`;
-      html += badge(metaCls, 'Meta: ' + metaStatus);
-      if (t.meta_quality_score) html += `<span class="text-[10px] text-gray-400">Q: ${t.meta_quality_score}</span>`;
+    const filter = window._waMetaFilter || 'APPROVED';
+    const filtered = filter === 'ALL' ? metaRows : metaRows.filter((t) => t.status === filter);
+    if (filtered.length === 0) {
+      html += emptyState(`No ${filter} templates`, 'Try a different status filter.');
+    } else {
+      html += `<div class="space-y-2">`;
+      filtered.forEach((t) => {
+        const local = metaLocalByName[t.name];
+        const linked = !!local;
+        const bodyComp = (t.components || []).find((c) => c.type === 'BODY');
+        const bodyPreview = (bodyComp?.text || '').slice(0, 200);
+        const statusCls = t.status === 'APPROVED' ? 'completed'
+          : t.status === 'REJECTED' ? 'failed'
+          : t.status === 'PENDING' ? 'processing'
+          : 'pending';
+        html += `<div class="p-4 rounded-2xl border ${linked ? 'border-green-200 bg-green-50/40' : 'border-gray-100'}">`;
+        html += `<div class="flex items-center justify-between mb-2 flex-wrap gap-2">`;
+        html += `<div class="flex items-center gap-2 flex-wrap">`;
+        html += `<span class="text-sm font-semibold">${escapeHtml(t.name)}</span>`;
+        html += `<span class="text-[10px] text-gray-400 uppercase">${escapeHtml(t.language || 'en')}</span>`;
+        html += `<span class="text-[10px] text-gray-500">${escapeHtml(t.category || 'UTILITY')}</span>`;
+        html += badge(statusCls, t.status);
+        if (linked) {
+          html += `<span class="text-[10px] text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Linked: ${escapeHtml(local.purpose)}${local.enabled === false ? ' (disabled)' : ''}</span>`;
+        }
+        html += `</div></div>`;
+        if (bodyPreview) html += `<div class="text-xs text-gray-700 whitespace-pre-wrap bg-surface-100 rounded-lg p-2 max-h-24 overflow-y-auto">${escapeHtml(bodyPreview)}${bodyComp?.text?.length > 200 ? '...' : ''}</div>`;
+        // Actions
+        html += `<div class="flex gap-2 mt-2 flex-wrap">`;
+        if (t.status === 'APPROVED') {
+          if (linked) {
+            html += `<button onclick="reimportMetaTemplate('${escapeHtml(t.name)}','${escapeHtml(t.language||'en')}','${escapeHtml(t.id)}','${escapeHtml(local.purpose)}','${escapeHtml(t.status)}','${escapeHtml(t.category||'UTILITY')}')" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs">Re-import</button>`;
+          } else {
+            html += `<button onclick="linkMetaTemplate('${escapeHtml(t.name)}','${escapeHtml(t.language||'en')}','${escapeHtml(t.id)}','${escapeHtml(t.status)}','${escapeHtml(t.category||'UTILITY')}')" class="px-3 py-1.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs">Link to purpose</button>`;
+          }
+          html += `<button onclick="testMetaTemplate('${escapeHtml(linked ? local.purpose : t.name)}')" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs">Test send</button>`;
+        }
+        html += `</div></div>`;
+      });
       html += `</div>`;
-      html += `<label class="text-xs"><input type="checkbox" ${t.enabled?'checked':''} onchange="toggleWaTemplate('${t.purpose}',this.checked)"> enabled</label>`;
-      html += `</div>`;
+    }
+  }
+  html += `</div>`; // close meta templates
 
-      // Event types display
-      html += `<div class="text-[11px] text-gray-500 mb-2">Triggers on: ${events.length ? events.map(e => `<span class="inline-block px-2 py-0.5 bg-brand-50 text-brand-700 rounded-full mr-1">${e}</span>`).join('') : '<em class="text-gray-400">no events (manual only)</em>'}</div>`;
-
-      // Body preview
+  // ============================================================
+  // Local drafts (collapsed) — power-user editor stays available
+  // ============================================================
+  const draftCount = localTemplates.filter((t) => !t.template_name).length;
+  const localUnlinkedCount = localTemplates.filter((t) => !t.template_name).length;
+  if (localUnlinkedCount > 0) {
+    html += `<details class="bg-white rounded-3xl shadow-card p-6 mt-6"><summary class="cursor-pointer flex items-center justify-between">`;
+    html += `<div><h3 class="font-bold text-base">Local drafts (${localUnlinkedCount})</h3>`;
+    html += `<p class="text-xs text-gray-400">Templates created in RelayOS but not yet linked to a Meta-approved template. They can still send within the 24h customer window.</p></div>`;
+    html += `<span class="text-xs text-gray-400">click to expand</span></summary>`;
+    html += `<div class="mt-4 space-y-3">`;
+    localTemplates.filter((t) => !t.template_name).forEach((t) => {
+      html += `<div class="p-3 rounded-2xl border border-gray-100">`;
+      html += `<div class="text-sm font-semibold mb-1">${escapeHtml(t.purpose)} <span class="text-[10px] text-gray-400">${t.enabled?'enabled':'disabled'}</span></div>`;
       html += `<div class="text-xs text-gray-700 whitespace-pre-wrap bg-surface-100 rounded-lg p-2 max-h-20 overflow-y-auto">${escapeHtml(t.body_text||'')}</div>`;
-
-      // Actions
-      html += `<div class="flex gap-2 mt-2 flex-wrap">`;
-      html += `<button onclick="editWaTemplate('${t.purpose}')" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs transition-all">Edit</button>`;
-      if (metaStatus === 'DRAFT' || metaStatus === 'REJECTED') {
-        html += `<button onclick="submitToMeta('${t.purpose}')" class="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-semibold rounded-full text-xs transition-all">Submit to Meta</button>`;
-      } else if (metaStatus === 'PENDING' || metaStatus === 'APPROVED') {
-        html += `<button onclick="syncFromMeta('${t.purpose}')" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs transition-all">Sync from Meta</button>`;
-      }
-      html += `<button onclick="deleteWaTemplate('${t.purpose}')" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Delete</button>`;
-      html += `</div>`;
-      if (t.meta_rejection_reason) html += `<div class="text-xs text-red-500 mt-2">${escapeHtml(t.meta_rejection_reason)}</div>`;
+      html += `<div class="flex gap-2 mt-2"><button onclick="editWaTemplate('${t.purpose}')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-full text-xs font-semibold">Edit</button>`;
+      html += `<button onclick="submitToMeta('${t.purpose}')" class="px-3 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-full text-xs font-semibold">Submit to Meta</button>`;
+      html += `<button onclick="deleteWaTemplate('${t.purpose}')" class="px-3 py-1 bg-red-50 text-red-500 hover:bg-red-100 rounded-full text-xs font-semibold">Delete</button></div>`;
       html += `</div>`;
     });
-    html += `</div>`;
+    html += `<div class="mt-3"><button onclick="showCreateTemplateModal()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs">Create draft</button></div>`;
+    html += `</div></details>`;
   }
-  html += `</div>`;
 
-  // Test send
-  html += `<div class="bg-white rounded-3xl shadow-card p-6 mt-6"><h3 class="font-bold text-base mb-4">Send Test</h3>`;
-  html += `<div class="grid grid-cols-1 md:grid-cols-3 gap-3">`;
-  html += `<div><label class="block text-xs text-gray-400 mb-1">To (phone)</label><input id="wa-test-to" placeholder="+2783..." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
-  html += `<div class="md:col-span-2"><label class="block text-xs text-gray-400 mb-1">Template</label><select id="wa-test-purpose" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
-  templates.forEach(t => { html += `<option value="${t.purpose}">${t.purpose}</option>`; });
-  html += `</select></div></div>`;
-  html += `<button onclick="sendWaTest()" class="mt-4 w-full md:w-auto px-6 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Send Test</button></div>`;
+  // ============================================================
+  // Test send card (only meaningful when there is at least one
+  // template configured locally — Meta-linked or draft)
+  // ============================================================
+  if (localTemplates.length) {
+    html += `<div class="bg-white rounded-3xl shadow-card p-6 mt-6"><h3 class="font-bold text-base mb-4">Send Test</h3>`;
+    html += `<div class="grid grid-cols-1 md:grid-cols-3 gap-3">`;
+    html += `<div><label class="block text-xs text-gray-400 mb-1">To (phone)</label><input id="wa-test-to" placeholder="+2783..." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0"></div>`;
+    html += `<div class="md:col-span-2"><label class="block text-xs text-gray-400 mb-1">Template</label><select id="wa-test-purpose" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">`;
+    localTemplates.forEach((t) => {
+      const tag = t.template_name ? ' (Meta-linked)' : ' (local draft)';
+      html += `<option value="${t.purpose}">${t.purpose}${tag}</option>`;
+    });
+    html += `</select></div></div>`;
+    html += `<button onclick="sendWaTest()" class="mt-4 w-full md:w-auto px-6 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Send Test</button></div>`;
+  }
 
   // Messages log
   if (messages.length) {
@@ -2874,13 +2962,145 @@ async function renderWhatsApp() {
     messages.forEach(m => {
       const time = new Date(m.created_at).toLocaleString();
       const dir = m.direction === 'outbound' ? 'text-blue-600' : 'text-green-600';
-      html += `<div class="flex items-start gap-3 p-2 rounded-xl hover:bg-surface-100"><div class="flex-1"><div class="flex items-center gap-2"><span class="text-xs font-semibold ${dir}">${m.direction}</span><span class="text-[11px] text-gray-400">${time}</span>${badge(m.status)}</div><div class="text-xs text-gray-600 mt-1 truncate max-w-md">${escapeHtml(m.body||'')}</div></div><span class="text-[11px] text-gray-400 whitespace-nowrap">${m.phone_to||m.phone_from||''}</span></div>`;
+      html += `<div class="flex items-start gap-3 p-2 rounded-xl hover:bg-surface-100"><div class="flex-1"><div class="flex items-center gap-2"><span class="text-xs font-semibold ${dir}">${m.direction}</span><span class="text-[11px] text-gray-400">${time}</span>${badge(m.status)}</div>`;
+      html += `<div class="text-xs text-gray-600 mt-1 truncate max-w-md">${escapeHtml(m.body||'')}</div>`;
+      if (m.last_error) html += `<div class="text-[11px] text-red-500 mt-1 truncate max-w-md" title="${escapeHtml(m.last_error)}">Meta error: ${escapeHtml(m.last_error)}</div>`;
+      html += `</div><span class="text-[11px] text-gray-400 whitespace-nowrap">${m.phone_to||m.phone_from||''}</span></div>`;
     });
     html += `</div></div>`;
   }
 
   document.getElementById('tab-content').innerHTML = html;
-  window._waTemplates = templates;
+  window._waTemplates = localTemplates;
+  window._waMetaRows = metaRows;
+}
+
+function setWaMetaFilter(value) {
+  window._waMetaFilter = value;
+  renderWhatsApp();
+}
+
+// ---- Meta template actions -----------------------------------------
+
+function linkMetaTemplate(name, language, metaId, status, category) {
+  // Prompt the operator to choose a local purpose. We show the well-known
+  // purposes plus a "custom" entry so they can map e.g. a marketing
+  // template to a custom event.
+  const purposes = [
+    'order_confirmed', 'order_in_transit', 'order_at_locker',
+    'order_out_for_delivery', 'order_delivered', 'order_flagged',
+    'order_details_updated',
+  ];
+  const guess = purposes.includes(name) ? name : '';
+  openModal('Link Meta template',
+    `<p class="text-xs text-gray-400 mb-3">Link <code class="bg-surface-100 px-1 rounded">${escapeHtml(name)}</code> to a local purpose so RelayOS can dispatch it on the matching domain event.</p>` +
+    `<label class="block text-xs text-gray-400 mb-1">Purpose</label>` +
+    `<select id="link-purpose" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 mb-2">` +
+      purposes.map((p) => `<option value="${p}"${p===guess?' selected':''}>${p}</option>`).join('') +
+      `<option value="__custom__">Custom...</option>` +
+    `</select>` +
+    `<input id="link-custom" placeholder="custom purpose" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 hidden">`,
+    `<button onclick="closeModal({target:document.querySelector('.modal-backdrop')})" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Cancel</button>` +
+    `<button onclick="confirmLinkMeta('${name}','${language}','${metaId}','${status}','${category}')" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm">Link</button>`,
+  );
+  document.getElementById('link-purpose').addEventListener('change', (e) => {
+    const c = document.getElementById('link-custom');
+    if (c) c.classList.toggle('hidden', e.target.value !== '__custom__');
+  });
+}
+
+async function confirmLinkMeta(name, language, metaId, status, category) {
+  let purpose = document.getElementById('link-purpose').value;
+  if (purpose === '__custom__') {
+    const custom = (document.getElementById('link-custom').value || '').trim();
+    if (!custom) { toast('Enter a custom purpose', 'warning'); return; }
+    purpose = custom;
+  }
+  const meta = (window._waMetaRows || []).find((r) => r.name === name && r.language === language);
+  const bodyComp = meta && (meta.components || []).find((c) => c.type === 'BODY');
+  const bodyText = bodyComp?.text || '';
+  const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
+  // Pick well-known variable names for known purposes; otherwise generic.
+  const VAR_MAP = {
+    order_confirmed: ['customer_name', 'order_number', 'waybill'],
+    order_in_transit: ['customer_name', 'order_number', 'waybill'],
+    order_at_locker: ['customer_name', 'order_number', 'pincode'],
+    order_out_for_delivery: ['customer_name', 'order_number'],
+    order_delivered: ['customer_name', 'order_number'],
+    order_flagged: ['customer_name', 'order_number'],
+    order_details_updated: ['customer_name', 'order_number', 'change_summary'],
+  };
+  const variables = (VAR_MAP[purpose] || ['var_1', 'var_2', 'var_3', 'var_4']).slice(0, placeholders);
+
+  const { data } = await api('POST', '/whatsapp/templates/meta/import', {
+    meta_template_id: metaId,
+    meta_template_name: name,
+    language_code: language,
+    purpose,
+    body_text: bodyText,
+    variables,
+    meta_status: status,
+    meta_category: category,
+  });
+  if (data?.success) {
+    toast('Linked — RelayOS will use this template on the next dispatch', 'success');
+    closeModal({ target: document.querySelector('.modal-backdrop') });
+    setTimeout(renderWhatsApp, 500);
+  } else {
+    toast(data?.error?.message || 'Link failed', 'error');
+  }
+}
+
+async function reimportMetaTemplate(name, language, metaId, purpose, status, category) {
+  if (!confirm(`Re-import "${name}" (${language}) into purpose "${purpose}"? This refreshes body, variables and language from Meta.`)) return;
+  const meta = (window._waMetaRows || []).find((r) => r.name === name && r.language === language);
+  const bodyComp = meta && (meta.components || []).find((c) => c.type === 'BODY');
+  const bodyText = bodyComp?.text || '';
+  const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
+  const VAR_MAP = {
+    order_confirmed: ['customer_name', 'order_number', 'waybill'],
+    order_in_transit: ['customer_name', 'order_number', 'waybill'],
+    order_at_locker: ['customer_name', 'order_number', 'pincode'],
+    order_out_for_delivery: ['customer_name', 'order_number'],
+    order_delivered: ['customer_name', 'order_number'],
+    order_flagged: ['customer_name', 'order_number'],
+    order_details_updated: ['customer_name', 'order_number', 'change_summary'],
+  };
+  const variables = (VAR_MAP[purpose] || ['var_1', 'var_2', 'var_3', 'var_4']).slice(0, placeholders);
+  const { data } = await api('POST', '/whatsapp/templates/meta/import', {
+    meta_template_id: metaId,
+    meta_template_name: name,
+    language_code: language,
+    purpose,
+    body_text: bodyText,
+    variables,
+    meta_status: status,
+    meta_category: category,
+  });
+  if (data?.success) { toast('Re-imported from Meta', 'success'); setTimeout(renderWhatsApp, 500); }
+  else toast(data?.error?.message || 'Re-import failed', 'error');
+}
+
+async function syncAllMetaTemplates() {
+  if (!confirm('Import every APPROVED Meta template whose name matches a known purpose (order_confirmed, order_in_transit, etc)? Existing local rows for those purposes will be updated in place.')) return;
+  const { data } = await api('POST', '/whatsapp/templates/meta/import-all', {});
+  if (!data?.success) { toast(data?.error?.message || 'Import failed', 'error'); return; }
+  const imported = data.data.imported || [];
+  const skipped = data.data.skipped || [];
+  toast(`Imported ${imported.length}${imported.length ? ': ' + imported.join(', ') : ''}${skipped.length ? ` · skipped ${skipped.length}` : ''}`, 'success', 6000);
+  setTimeout(renderWhatsApp, 500);
+}
+
+async function testMetaTemplate(purposeOrName) {
+  const to = prompt(`Send a test "${purposeOrName}" message to which phone number? (international format, e.g. +2783...)`);
+  if (!to) return;
+  const { data } = await api('POST', '/whatsapp/test', { to: to.trim(), purpose: purposeOrName });
+  if (data?.success) {
+    if (data.data?.sent) toast('Test sent', 'success');
+    else toast(`Test not sent: ${data.data?.skipped_reason || data.data?.error || 'unknown'}`, 'warning', 6000);
+  } else {
+    toast(data?.error?.message || 'Test failed', 'error');
+  }
 }
 async function saveWaSettings() {
   const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
