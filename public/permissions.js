@@ -45,6 +45,7 @@
    */
   const TAB_PERMISSIONS = {
     overview: 'dashboard.view',
+    orders: 'orders.view',
     pipeline: 'pipeline.view',
     packing: 'orders.view',
     'manual-upload': 'orders.view',

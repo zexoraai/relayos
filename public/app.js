@@ -312,7 +312,7 @@ function pickFirstAllowedTab() {
   if (!window.RelayPermissions) return 'overview';
   if (window.RelayPermissions.canSeeTab(currentUserPermissions, 'overview')) return 'overview';
   // Try the tabs in display order
-  const order = ['pipeline','packing','manual-upload','collections','fulfillment','customers','agents','chatbot-config','caretaker','whatsapp','marketing','inbox','knowledge','users','settings','usage','failed','health'];
+  const order = ['orders','pipeline','packing','manual-upload','collections','fulfillment','customers','agents','chatbot-config','caretaker','whatsapp','marketing','inbox','knowledge','users','settings','usage','failed','health'];
   for (const t of order) {
     if (window.RelayPermissions.canSeeTab(currentUserPermissions, t)) return t;
   }
@@ -373,12 +373,13 @@ function switchTab(tab) {
   }
   currentTab = tab;
   document.getElementById('page-title').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
-  const subtitles = { overview:'Welcome back', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
+  const subtitles = { overview:'Welcome back', orders:'Every order in one place', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
   document.getElementById('page-subtitle').textContent = subtitles[tab] || '';
   document.querySelectorAll('.sidebar-item').forEach(li => li.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(li => { const txt = li.querySelector('span'); if(txt && txt.textContent.toLowerCase()===tab) li.classList.add('active'); });
   document.getElementById('tab-content').innerHTML = '<div class="flex items-center justify-center py-20"><div class="w-6 h-6 border-2 border-brand-400 border-t-transparent rounded-full animate-spin"></div></div>';
   if (tab === 'overview') renderOverview();
+  else if (tab === 'orders') renderOrders();
   else if (tab === 'pipeline') renderPipeline();
   else if (tab === 'packing') renderPacking();
   else if (tab === 'manual-upload') renderManualUpload();
@@ -1027,6 +1028,462 @@ async function renderAgents() {
 
 
 // ---- Stub renders for remaining tabs (functional, Tailwind-styled) ----
+
+// ============================================================
+// Orders tab — single source of truth across email, pipeline,
+// caretaker, packer, courier, and Shopify. Designed so the
+// operator can answer "where is order #X" without flipping tabs.
+// Backed by GET /orders + GET /orders/:id.
+// ============================================================
+
+let _ordersFilters = {
+  search: '',
+  status: '',           // multi: comma-separated
+  packing_status: '',
+  routing_status: '',
+  email_status: '',     // single
+  pipeline_status: '',
+  has_review: '',       // 'yes' | 'no' | ''
+  shopify: '',          // 'fulfilled' | 'pending' | 'cancelled' | ''
+  date_from: '',
+  date_to: '',
+  sort: 'newest',
+};
+let _ordersPage = { limit: 50, offset: 0 };
+let _ordersDetailId = null;  // currently-open order id (drawer)
+
+async function renderOrders() {
+  const f = _ordersFilters;
+  const params = new URLSearchParams();
+  Object.entries(f).forEach(([k, v]) => { if (v) params.set(k, v); });
+  params.set('limit', String(_ordersPage.limit));
+  params.set('offset', String(_ordersPage.offset));
+
+  const { data } = await api('GET', '/orders?' + params.toString());
+  if (!data?.success) {
+    document.getElementById('tab-content').innerHTML = emptyState('Failed to load orders', '');
+    return;
+  }
+  const rows = data.data.rows || [];
+  const total = data.data.total || 0;
+  const counts = data.data.counts || {};
+
+  // ---- Toolbar -----------------------------------------------------
+  let html = `<div class="bg-white rounded-3xl shadow-card p-4 md:p-6 mb-4">`;
+  html += `<div class="flex flex-col md:flex-row md:items-center gap-2 mb-3">`;
+  html += `<input id="orders-search" placeholder="Search by order #, name, phone, waybill, locker, address, email subject..." value="${escapeHtml(f.search || '')}" oninput="onOrdersSearchInput(event)" class="flex-1 px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">`;
+  html += `<select onchange="setOrdersFilter('sort', this.value)" class="px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">` +
+    `<option value="newest"${f.sort==='newest'?' selected':''}>Newest first</option>` +
+    `<option value="oldest"${f.sort==='oldest'?' selected':''}>Oldest first</option>` +
+    `<option value="status_priority"${f.sort==='status_priority'?' selected':''}>Status priority</option>` +
+    `</select>`;
+  html += `<select onchange="setOrdersFilter('date_from', this.value)" class="px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">` +
+    `<option value=""${!f.date_from?' selected':''}>Any date</option>` +
+    `<option value="today"${f.date_from==='today'?' selected':''}>Today</option>` +
+    `<option value="7d"${f.date_from==='7d'?' selected':''}>Last 7 days</option>` +
+    `<option value="30d"${f.date_from==='30d'?' selected':''}>Last 30 days</option>` +
+    `</select>`;
+  if (Object.values(f).some((v) => v)) {
+    html += `<button onclick="resetOrdersFilters()" class="text-[11px] text-gray-400 hover:text-gray-700 underline">Reset</button>`;
+  }
+  html += `</div>`;
+
+  // ---- Filter chips: order status -----------------------------------
+  // We render a compact set of meaningful statuses + counts. Counts
+  // come from data.counts.by_status (filtered context).
+  const ORDER_STATUSES = ['created','submitted','collected','in_transit','at_locker','out_for_delivery','delivered','cancelled','failed','awaiting_manual_upload'];
+  const visibleStatuses = ORDER_STATUSES.filter((s) => (counts.by_status || {})[s]);
+  if (visibleStatuses.length) {
+    html += `<div class="flex gap-1.5 flex-wrap mb-2">`;
+    html += `<span class="text-[10px] uppercase tracking-wide text-gray-400 self-center mr-1">Status:</span>`;
+    html += chipBtn('', 'All', counts.total ?? total, !f.status, () => '');
+    visibleStatuses.forEach((s) => {
+      html += chipBtn(s, s.replace(/_/g, ' '), counts.by_status[s] || 0, f.status === s);
+    });
+    html += `</div>`;
+  }
+
+  // Email status chips — useful when chasing "did this order's email get processed"
+  const emailCounts = countsForEmailStatus(rows);
+  html += `<div class="flex gap-1.5 flex-wrap mb-2">`;
+  html += `<span class="text-[10px] uppercase tracking-wide text-gray-400 self-center mr-1">Email:</span>`;
+  html += emailChipBtn('', 'Any', total, !f.email_status);
+  ['processed','processing','fetched','failed'].forEach((s) => {
+    html += emailChipBtn(s, s, emailCounts[s] || 0, f.email_status === s);
+  });
+  html += `</div>`;
+
+  // Caretaker review filter
+  html += `<div class="flex gap-1.5 flex-wrap">`;
+  html += `<span class="text-[10px] uppercase tracking-wide text-gray-400 self-center mr-1">Review:</span>`;
+  html += reviewChipBtn('', 'Any', total, !f.has_review);
+  html += reviewChipBtn('yes', 'Open review', rows.filter((r) => r.latest_evaluation_id && !r.latest_evaluation_resolution).length, f.has_review === 'yes');
+  html += reviewChipBtn('no', 'No review', null, f.has_review === 'no');
+  html += `</div>`;
+  html += `</div>`;
+
+  // ---- List + detail layout ----------------------------------------
+  let listHtml = `<div class="bg-white rounded-3xl shadow-card overflow-hidden">`;
+  listHtml += `<div class="flex items-center justify-between p-4 border-b border-gray-100"><h3 class="font-bold text-base">${total} order${total === 1 ? '' : 's'}</h3>`;
+  listHtml += `<div class="flex items-center gap-2">`;
+  if (_ordersPage.offset > 0) {
+    listHtml += `<button onclick="ordersPage(-1)" class="text-[11px] px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200">&larr; Prev</button>`;
+  }
+  if (_ordersPage.offset + _ordersPage.limit < total) {
+    listHtml += `<button onclick="ordersPage(1)" class="text-[11px] px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200">Next &rarr;</button>`;
+  }
+  listHtml += `<button onclick="renderOrders()" class="text-[11px] text-gray-400 hover:text-gray-600">refresh</button>`;
+  listHtml += `</div></div>`;
+
+  if (rows.length === 0) {
+    listHtml += emptyState('No orders match', 'Adjust the filters above or clear the search.');
+  } else {
+    // Desktop: table. Mobile: cards (the responsive table observer
+    // already adds `data-label` per cell).
+    listHtml += `<div class="overflow-x-auto">`;
+    listHtml += `<table class="w-full text-sm">`;
+    listHtml += `<thead class="bg-surface-100"><tr class="text-left">`;
+    [
+      'Order #', 'Customer', 'Method', 'Email', 'Pipeline',
+      'Packing', 'Courier', 'Shopify', 'Created', 'Actions',
+    ].forEach((h) => {
+      listHtml += `<th class="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">${h}</th>`;
+    });
+    listHtml += `</tr></thead><tbody>`;
+    rows.forEach((r) => {
+      const active = _ordersDetailId === r.id;
+      listHtml += `<tr onclick="openOrderDrawer('${r.id}')" class="border-b border-gray-100 cursor-pointer ${active ? 'bg-brand-50/40' : 'hover:bg-gray-50'}">`;
+      listHtml += `<td class="px-3 py-2 font-semibold whitespace-nowrap">#${escapeHtml(r.order_number || '?')}</td>`;
+      listHtml += `<td class="px-3 py-2"><div class="font-medium">${escapeHtml(r.customer_name || '-')}</div><div class="text-[11px] text-gray-400">${escapeHtml(r.customer_phone || '')}</div></td>`;
+      listHtml += `<td class="px-3 py-2 text-[11px] text-gray-600 capitalize whitespace-nowrap">${escapeHtml((r.delivery_method || '-').replace(/-/g, ' '))}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderEmailPill(r)}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderPipelinePill(r)}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderPackingPill(r)}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderCourierPill(r)}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderShopifyPill(r)}</td>`;
+      listHtml += `<td class="px-3 py-2 text-[11px] text-gray-500 whitespace-nowrap">${r.order_created_at ? new Date(r.order_created_at).toLocaleString() : '-'}</td>`;
+      listHtml += `<td class="px-3 py-2">${renderRowActions(r)}</td>`;
+      listHtml += `</tr>`;
+    });
+    listHtml += `</tbody></table></div>`;
+  }
+  listHtml += `</div>`;
+
+  // Two-column on desktop: list 3/5, sticky drawer 2/5
+  html += `<div class="grid grid-cols-1 lg:grid-cols-5 gap-4">` +
+    `<div class="lg:col-span-3">${listHtml}</div>` +
+    `<div class="lg:col-span-2"><div id="orders-drawer" class="lg:sticky lg:top-4">${
+      _ordersDetailId ? '<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Loading detail...</div>' : '<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Click any order on the left to see its full timeline here — email receipt through Shopify fulfillment.</div>'
+    }</div></div>` +
+    `</div>`;
+
+  document.getElementById('tab-content').innerHTML = html;
+
+  if (_ordersDetailId) {
+    const stillThere = rows.find((r) => r.id === _ordersDetailId);
+    if (stillThere) openOrderDrawer(_ordersDetailId);
+    else _ordersDetailId = null;
+  }
+}
+
+// ---- Helpers ------------------------------------------------------
+
+function chipBtn(value, label, count, active) {
+  const cls = active
+    ? 'bg-brand-400 text-gray-900'
+    : 'bg-gray-100 hover:bg-gray-200 text-gray-600';
+  return `<button onclick="setOrdersFilter('status', ${JSON.stringify(value)})" class="text-[11px] px-2.5 py-1 rounded-full font-medium transition-all ${cls} capitalize">${escapeHtml(label)}<span class="ml-1 opacity-70">${count ?? ''}</span></button>`;
+}
+function emailChipBtn(value, label, count, active) {
+  const tone = value === 'failed' ? 'red' : value === 'processed' ? 'green' : value === 'processing' ? 'blue' : 'gray';
+  const cls = active
+    ? `bg-${tone}-500 text-white`
+    : `bg-${tone}-50 hover:bg-${tone}-100 text-${tone}-700`;
+  return `<button onclick="setOrdersFilter('email_status', ${JSON.stringify(value)})" class="text-[11px] px-2.5 py-1 rounded-full font-medium transition-all ${cls} capitalize">${escapeHtml(label)}<span class="ml-1 opacity-70">${count ?? ''}</span></button>`;
+}
+function reviewChipBtn(value, label, count, active) {
+  const cls = active
+    ? 'bg-amber-500 text-white'
+    : 'bg-amber-50 hover:bg-amber-100 text-amber-700';
+  return `<button onclick="setOrdersFilter('has_review', ${JSON.stringify(value)})" class="text-[11px] px-2.5 py-1 rounded-full font-medium transition-all ${cls}">${escapeHtml(label)}${count !== null && count !== undefined ? `<span class="ml-1 opacity-70">${count}</span>` : ''}</button>`;
+}
+function countsForEmailStatus(rows) {
+  const out = { failed: 0, processed: 0, processing: 0, fetched: 0 };
+  rows.forEach((r) => { if (r.email_status && out[r.email_status] !== undefined) out[r.email_status] += 1; });
+  return out;
+}
+
+function renderEmailPill(r) {
+  if (!r.email_status) return `<span class="text-[10px] text-gray-300">-</span>`;
+  const colorMap = {
+    processed: 'bg-green-50 text-green-700',
+    processing: 'bg-blue-50 text-blue-700',
+    fetched: 'bg-gray-100 text-gray-600',
+    failed: 'bg-red-50 text-red-600',
+  };
+  const ts = r.email_processed_at || r.email_fetched_at || r.email_date;
+  const tooltip = r.email_last_error
+    ? r.email_last_error.slice(0, 200)
+    : (ts ? new Date(ts).toLocaleString() : '');
+  return `<span class="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${colorMap[r.email_status]}" title="${escapeHtml(tooltip)}">${r.email_status}</span>`;
+}
+function renderPipelinePill(r) {
+  if (!r.pipeline_status) return `<span class="text-[10px] text-gray-300">-</span>`;
+  const colorMap = {
+    completed: 'bg-green-50 text-green-700',
+    pending_review: 'bg-amber-50 text-amber-700',
+    failed: 'bg-red-50 text-red-600',
+    processing: 'bg-blue-50 text-blue-700',
+    pending: 'bg-gray-100 text-gray-600',
+    rejected: 'bg-red-50 text-red-600',
+  };
+  const cls = colorMap[r.pipeline_status] || 'bg-gray-100 text-gray-600';
+  const label = r.pipeline_status.replace(/_/g, ' ');
+  const tip = r.pipeline_last_error || r.pipeline_current_stage || '';
+  return `<span class="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}" title="${escapeHtml(tip)}">${label}</span>`;
+}
+function renderPackingPill(r) {
+  if (!r.packing_status) return `<span class="text-[10px] text-gray-300">-</span>`;
+  const colorMap = {
+    awaiting_packing: 'bg-gray-100 text-gray-600',
+    packed: 'bg-blue-50 text-blue-700',
+    dropped_off: 'bg-green-50 text-green-700',
+    cancelled: 'bg-red-50 text-red-600',
+  };
+  return `<span class="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${colorMap[r.packing_status] || 'bg-gray-100 text-gray-600'}">${r.packing_status.replace(/_/g, ' ')}</span>`;
+}
+function renderCourierPill(r) {
+  if (!r.fulfillment_milestone) return `<span class="text-[10px] text-gray-300">-</span>`;
+  const m = r.fulfillment_milestone;
+  const cls = m === 'delivered' ? 'bg-green-50 text-green-700'
+    : m === 'cancelled' || m === 'failed' ? 'bg-red-50 text-red-600'
+    : m === 'at_locker' ? 'bg-indigo-50 text-indigo-700'
+    : m === 'out_for_delivery' || m === 'in_transit' ? 'bg-blue-50 text-blue-700'
+    : 'bg-gray-100 text-gray-600';
+  return `<span class="text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${cls}" title="${escapeHtml(r.fulfillment_courier_status || '')}">${m.replace(/_/g, ' ')}</span>`;
+}
+function renderShopifyPill(r) {
+  if (r.shopify_fulfillment_status === 'cancelled') {
+    return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium whitespace-nowrap">cancelled</span>`;
+  }
+  if (r.shopify_fulfilled) {
+    return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-medium whitespace-nowrap" title="${r.shopify_fulfilled_at ? new Date(r.shopify_fulfilled_at).toLocaleString() : ''}">fulfilled</span>`;
+  }
+  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium whitespace-nowrap">pending</span>`;
+}
+
+function renderRowActions(r) {
+  const actions = [];
+  // Open caretaker review
+  if (r.latest_evaluation_id && !r.latest_evaluation_resolution && r.latest_evaluation_verdict === 'review') {
+    actions.push(`<button onclick="event.stopPropagation();openReviewModal('${r.latest_evaluation_id}')" class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100 font-semibold">Review</button>`);
+  }
+  // Open in Manual Upload
+  if (r.routing_status === 'manual_upload') {
+    actions.push(`<button onclick="event.stopPropagation();switchTab('manual-upload')" class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold">Manual</button>`);
+  }
+  // Pipeline failed -> Reprocess
+  if (r.pipeline_status === 'failed' && r.pipeline_job_id) {
+    actions.push(`<button onclick="event.stopPropagation();reprocessFromOrders('${r.pipeline_job_id}')" class="text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 hover:bg-red-100 font-semibold">Reprocess</button>`);
+  }
+  if (!actions.length) actions.push(`<span class="text-[10px] text-gray-300">—</span>`);
+  return actions.join(' ');
+}
+
+async function reprocessFromOrders(pipelineJobId) {
+  if (!confirm('Reprocess this pipeline job from the start?\n\nExisting order + stage results will be deleted and the email re-enqueued.')) return;
+  const { data } = await api('POST', `/pipeline/jobs/${pipelineJobId}/reprocess`);
+  if (data?.success) { toast('Reprocess enqueued', 'success'); setTimeout(renderOrders, 1500); }
+  else toast(data?.error?.message || 'Reprocess failed', 'error');
+}
+
+function setOrdersFilter(key, value) {
+  _ordersFilters[key] = value;
+  _ordersPage.offset = 0;
+  renderOrders();
+}
+let _ordersSearchTimer = null;
+function onOrdersSearchInput(ev) {
+  const v = ev.target.value || '';
+  clearTimeout(_ordersSearchTimer);
+  _ordersSearchTimer = setTimeout(() => {
+    _ordersFilters.search = v;
+    _ordersPage.offset = 0;
+    renderOrders();
+  }, 300);
+}
+function resetOrdersFilters() {
+  _ordersFilters = { search: '', status: '', packing_status: '', routing_status: '', email_status: '', pipeline_status: '', has_review: '', shopify: '', date_from: '', date_to: '', sort: 'newest' };
+  _ordersPage.offset = 0;
+  renderOrders();
+}
+function ordersPage(direction) {
+  _ordersPage.offset = Math.max(0, _ordersPage.offset + direction * _ordersPage.limit);
+  renderOrders();
+}
+
+async function openOrderDrawer(orderId) {
+  _ordersDetailId = orderId;
+  // Highlight active row
+  document.querySelectorAll('#tab-content tbody tr').forEach((tr) => {
+    tr.classList.remove('bg-brand-50/40');
+  });
+  const drawer = document.getElementById('orders-drawer');
+  if (drawer) drawer.innerHTML = `<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Loading...</div>`;
+
+  const { data } = await api('GET', `/orders/${orderId}`);
+  if (!data?.success) {
+    if (drawer) drawer.innerHTML = `<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-red-500">Failed to load order</div>`;
+    return;
+  }
+  const d = data.data;
+  const o = d.order;
+  const e = d.email;
+  const pj = d.pipeline_job;
+  const stages = d.pipeline_stages || [];
+  const evals = d.caretaker_evaluations || [];
+  const recs = d.reconciliations || [];
+  const fj = d.fulfillment_job;
+  const fevents = d.fulfillment_events || [];
+  const wamsgs = d.whatsapp_messages || [];
+
+  let h = `<div class="bg-white rounded-3xl shadow-card p-5">`;
+  h += `<div class="flex items-center justify-between mb-1"><h3 class="font-bold text-base">#${escapeHtml(o.order_number || '?')} &middot; ${escapeHtml(o.customer_name || '-')}</h3>`;
+  h += `<button onclick="closeOrderDrawer()" class="text-gray-400 hover:text-gray-700 text-lg">&times;</button></div>`;
+  h += `<div class="text-[11px] text-gray-500 mb-4">${escapeHtml(o.customer_phone || '')}${o.delivery_method ? ' &middot; ' + escapeHtml(o.delivery_method.replace(/-/g, ' ')) : ''}</div>`;
+
+  // Status strip
+  h += `<div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4 text-center">`;
+  h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">Status</div><div class="text-xs font-semibold mt-1">${escapeHtml((o.status || '-').replace(/_/g, ' '))}</div></div>`;
+  h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">Routing</div><div class="text-xs font-semibold mt-1">${escapeHtml((o.routing_status || '-').replace(/_/g, ' '))}</div></div>`;
+  h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">Packing</div><div class="text-xs font-semibold mt-1">${escapeHtml((o.packing_status || '-').replace(/_/g, ' '))}</div></div>`;
+  h += `</div>`;
+
+  // Waybill / pin / locker
+  if (o.waybill || o.terminal_id) {
+    h += `<div class="grid grid-cols-3 gap-2 mb-4">`;
+    h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">Waybill</div><div class="text-xs font-semibold mt-1">${escapeHtml(o.waybill || '-')}</div></div>`;
+    h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">PIN</div><div class="text-xs font-semibold mt-1">${escapeHtml(o.pincode || '-')}</div></div>`;
+    h += `<div class="bg-surface-100 rounded-xl p-2"><div class="text-[10px] text-gray-400 uppercase">Locker</div><div class="text-xs font-semibold mt-1 truncate" title="${escapeHtml(o.nearest_locker_name || '')}">${escapeHtml(o.terminal_id || '-')}</div></div>`;
+    h += `</div>`;
+  }
+
+  // Manual upload reason
+  if (o.routing_status === 'manual_upload' && o.manual_upload_reason) {
+    h += `<div class="bg-amber-50 text-amber-700 text-[11px] rounded-xl px-3 py-2 mb-4"><span class="font-semibold">Manual upload:</span> ${escapeHtml(o.manual_upload_reason)}</div>`;
+  }
+
+  // Timeline header
+  h += `<h4 class="font-semibold text-xs uppercase tracking-wide text-gray-500 mb-2">Timeline</h4>`;
+  h += `<div class="space-y-2 mb-4">`;
+
+  // Email
+  if (e) {
+    const ts = e.processed_at || e.fetched_at || e.email_date || e.created_at;
+    const status = e.last_error ? 'failed' : e.processed_at ? 'processed' : e.processing_at ? 'processing' : 'fetched';
+    const color = status === 'failed' ? 'red' : status === 'processed' ? 'green' : status === 'processing' ? 'blue' : 'gray';
+    h += `<div class="border-l-2 border-${color}-300 pl-3 py-1">`;
+    h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold">Email ${status}</div><div class="text-[10px] text-gray-400">${ts ? new Date(ts).toLocaleString() : ''}</div></div>`;
+    if (e.subject) h += `<div class="text-[11px] text-gray-600 truncate" title="${escapeHtml(e.subject)}">${escapeHtml(e.subject)}</div>`;
+    if (e.sender) h += `<div class="text-[10px] text-gray-400">from ${escapeHtml(e.sender)}</div>`;
+    if (e.last_error) h += `<div class="text-[11px] text-red-600 mt-1">${escapeHtml(e.last_error.slice(0, 200))}</div>`;
+    h += `</div>`;
+  }
+
+  // Pipeline stages (compact)
+  if (stages.length) {
+    h += `<div class="border-l-2 border-blue-300 pl-3 py-1">`;
+    h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold">Pipeline · ${escapeHtml((pj && pj.status) || '?')}</div><div class="text-[10px] text-gray-400">${stages.length} stages</div></div>`;
+    stages.slice(-5).forEach((st) => {
+      const sc = st.status === 'completed' ? 'text-green-600' : st.status === 'failed' ? 'text-red-500' : 'text-gray-500';
+      h += `<div class="text-[11px] ${sc} flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-current"></span>${escapeHtml(st.stage)}${st.error_message ? `: ${escapeHtml(st.error_message.slice(0, 80))}` : ''}</div>`;
+    });
+    if (pj && pj.last_error) h += `<div class="text-[11px] text-red-600 mt-1">${escapeHtml(pj.last_error.slice(0, 200))}</div>`;
+    h += `</div>`;
+  }
+
+  // Caretaker evaluations (latest first, up to 3)
+  evals.slice(0, 3).forEach((ev) => {
+    const verdict = ev.resolution || ev.verdict;
+    const color = verdict === 'approved' ? 'green' : verdict === 'rejected' || verdict === 'reject' ? 'red' : verdict === 'review' ? 'amber' : 'gray';
+    h += `<div class="border-l-2 border-${color}-300 pl-3 py-1">`;
+    h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold capitalize">Caretaker · ${escapeHtml(verdict)}</div><div class="text-[10px] text-gray-400">${ev.resolved_at ? new Date(ev.resolved_at).toLocaleString() : new Date(ev.created_at).toLocaleString()}</div></div>`;
+    if (ev.summary) h += `<div class="text-[11px] text-gray-600">${escapeHtml(ev.summary.slice(0, 200))}</div>`;
+    if (ev.resolved_by) h += `<div class="text-[10px] text-gray-400">by ${escapeHtml(ev.resolved_by)}</div>`;
+    h += `</div>`;
+  });
+
+  // AI reconciliation (most recent only — full history is rare)
+  if (recs.length) {
+    const r = recs[0];
+    const conf = typeof r.confidence === 'number' || typeof r.confidence === 'string'
+      ? `${(parseFloat(r.confidence) * 100) | 0}%` : '?';
+    h += `<div class="border-l-2 border-amber-300 pl-3 py-1">`;
+    h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold">AI address · ${escapeHtml(r.decision)}</div><div class="text-[10px] text-gray-400">conf ${conf}</div></div>`;
+    if (r.ai_reasoning) h += `<div class="text-[11px] text-gray-600">${escapeHtml(String(r.ai_reasoning).slice(0, 200))}</div>`;
+    h += `</div>`;
+  }
+
+  // Fulfillment events (most recent 5)
+  if (fevents.length || fj) {
+    h += `<div class="border-l-2 border-indigo-300 pl-3 py-1">`;
+    h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold">Courier · ${escapeHtml((fj && fj.milestone) || 'pending')}</div><div class="text-[10px] text-gray-400">${fj && fj.last_polled_at ? 'polled ' + new Date(fj.last_polled_at).toLocaleString() : ''}</div></div>`;
+    fevents.slice(0, 5).forEach((ev) => {
+      h += `<div class="text-[11px] text-gray-600 flex items-center gap-2"><span class="w-1 h-1 rounded-full bg-gray-400"></span>${ev.event_date ? new Date(ev.event_date).toLocaleString() + ' · ' : ''}${escapeHtml(ev.status || '')} ${escapeHtml(ev.message || '')}</div>`;
+    });
+    h += `</div>`;
+  }
+
+  // Shopify
+  h += `<div class="border-l-2 border-${o.shopify_fulfilled ? 'green' : 'gray'}-300 pl-3 py-1">`;
+  h += `<div class="flex items-center justify-between"><div class="text-xs font-semibold">Shopify · ${o.shopify_fulfilled ? 'fulfilled' : (o.shopify_fulfillment_status || 'not yet')}</div><div class="text-[10px] text-gray-400">${o.shopify_fulfilled_at ? new Date(o.shopify_fulfilled_at).toLocaleString() : ''}</div></div>`;
+  if (o.shopify_order_id) h += `<div class="text-[10px] text-gray-400 font-mono">${escapeHtml(o.shopify_order_id)}</div>`;
+  h += `</div>`;
+
+  h += `</div>`; // close timeline space-y
+
+  // WhatsApp messages
+  if (wamsgs.length) {
+    h += `<h4 class="font-semibold text-xs uppercase tracking-wide text-gray-500 mb-2">Customer notifications (${wamsgs.length})</h4>`;
+    h += `<div class="space-y-1 mb-4">`;
+    wamsgs.forEach((m) => {
+      const sc = m.status === 'sent' || m.status === 'delivered' || m.status === 'read'
+        ? 'bg-green-50 text-green-700'
+        : m.status === 'failed' ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700';
+      h += `<div class="border border-gray-100 rounded-lg p-2 text-[11px]">`;
+      h += `<div class="flex items-center justify-between mb-0.5"><span class="font-semibold capitalize">${escapeHtml((m.purpose || 'unknown').replace(/_/g, ' '))}</span><span class="text-[10px] ${sc} px-1.5 py-0.5 rounded-full uppercase">${escapeHtml(m.status || '-')}</span></div>`;
+      h += `<div class="text-gray-500 truncate" title="${escapeHtml(m.body || '')}">${escapeHtml((m.body || '').slice(0, 90))}</div>`;
+      h += `</div>`;
+    });
+    h += `</div>`;
+  }
+
+  // Quick deep-links
+  h += `<div class="flex flex-wrap gap-1.5 pt-3 border-t border-gray-100">`;
+  if (o.latest_evaluation_id || (evals[0] && !evals[0].resolution && evals[0].verdict === 'review')) {
+    const eid = (evals[0] && !evals[0].resolution) ? evals[0].id : null;
+    if (eid) h += `<button onclick="openReviewModal('${eid}')" class="text-[11px] px-3 py-1 rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100 font-semibold">Review &amp; approve</button>`;
+  }
+  if (o.routing_status === 'manual_upload') {
+    h += `<button onclick="switchTab('manual-upload')" class="text-[11px] px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold">Open in Manual Upload</button>`;
+  }
+  if (o.pipeline_job_id) {
+    h += `<button onclick="reprocessFromOrders('${o.pipeline_job_id}')" class="text-[11px] px-3 py-1 rounded-full bg-gray-100 hover:bg-gray-200 font-semibold">Reprocess</button>`;
+  }
+  if (fj) {
+    h += `<button onclick="switchTab('fulfillment')" class="text-[11px] px-3 py-1 rounded-full bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold">Open in Fulfillment</button>`;
+  }
+  h += `</div>`;
+
+  h += `</div>`;
+  if (drawer) drawer.innerHTML = h;
+}
+
+function closeOrderDrawer() {
+  _ordersDetailId = null;
+  const drawer = document.getElementById('orders-drawer');
+  if (drawer) drawer.innerHTML = `<div class="bg-white rounded-3xl shadow-card p-6 text-sm text-gray-400">Click any order on the left to see its full timeline here — email receipt through Shopify fulfillment.</div>`;
+}
 
 // Fulfillment view state — persisted in-memory for the session so a tab
 // switch doesn't reset filters. Resets on full reload.
