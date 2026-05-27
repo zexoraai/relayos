@@ -51,11 +51,34 @@ router.post('/rules', requirePermission('caretaker.rules.manage'), validateBody(
 
 /**
  * GET /caretaker/evaluations - list pending reviews + recent decisions.
+ *
+ * Each row is enriched with `age_seconds` (how long the evaluation has been
+ * sitting unresolved, or how long ago it was resolved) and `urgency`
+ * (critical / high / normal / fresh / resolved) so the operator can spot
+ * orders nearing a missed-collection window without doing arithmetic.
+ *
+ * Urgency thresholds, applied to UNRESOLVED rows only:
+ *   - critical : > 24h    (collection window slipping)
+ *   - high     : 8 - 24h
+ *   - normal   : 2 - 8h
+ *   - fresh    : < 2h
+ *
+ * Resolved rows always carry urgency='resolved' regardless of age.
+ *
+ * Query params:
+ *   - verdict   : 'approve' | 'review' | 'reject' filter
+ *   - urgency   : single tier; the API also returns `counts` per tier so
+ *                 the UI can render filter chips with live numbers
+ *                 without a second roundtrip
+ *   - sort      : 'urgency' (default — oldest unresolved first), 'newest',
+ *                 'oldest'
+ *   - limit     : 1..200 (default 50)
  */
 router.get('/evaluations', requirePermission('caretaker.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
-  const { verdict, limit = '50' } = req.query;
+  const { verdict, urgency: urgencyFilter, sort } = req.query;
+  const limitNum = Math.max(1, Math.min(parseInt((req.query.limit as string) || '50', 10) || 50, 200));
 
   let q = db('caretaker_evaluations as ce')
     .leftJoin('pipeline_jobs as pj', 'pj.id', 'ce.pipeline_job_id')
@@ -91,14 +114,63 @@ router.get('/evaluations', requirePermission('caretaker.view'), async (req: Auth
       'recon.ai_used as recon_ai_used',
       'recon.ai_suggestion as recon_ai_suggestion',
       'recon.missing_after as recon_missing_after',
-    )
-    .orderBy('ce.created_at', 'desc')
-    .limit(parseInt(limit as string, 10));
+    );
 
   if (verdict) q = q.where('ce.verdict', verdict as string);
 
-  const rows = await q;
-  return res.status(200).json({ success: true, data: rows });
+  // Pull a generous super-set then enrich and apply urgency filter / sort
+  // in JS. We keep the over-fetch small (3x) so DB cost stays bounded
+  // while letting urgency sort produce stable results across the full
+  // tenant queue, not just the most-recent slice.
+  const overFetchLimit = Math.min(limitNum * 3, 600);
+  const rawRows = await q.orderBy('ce.created_at', 'desc').limit(overFetchLimit);
+
+  const HOUR = 3600;
+  const tierFor = (ageSec: number, resolved: boolean): 'critical' | 'high' | 'normal' | 'fresh' | 'resolved' => {
+    if (resolved) return 'resolved';
+    if (ageSec >= 24 * HOUR) return 'critical';
+    if (ageSec >= 8 * HOUR) return 'high';
+    if (ageSec >= 2 * HOUR) return 'normal';
+    return 'fresh';
+  };
+  const tierRank: Record<string, number> = { critical: 0, high: 1, normal: 2, fresh: 3, resolved: 4 };
+
+  const now = Date.now();
+  const enriched = rawRows.map((r: any) => {
+    const resolved = !!r.resolution;
+    const refTime = resolved && r.resolved_at ? new Date(r.resolved_at).getTime() : new Date(r.created_at).getTime();
+    const ageSec = Math.max(0, Math.floor((now - refTime) / 1000));
+    return { ...r, age_seconds: ageSec, urgency: tierFor(ageSec, resolved) };
+  });
+
+  // Tier counts BEFORE urgency filter so chips show the full picture.
+  const counts = { critical: 0, high: 0, normal: 0, fresh: 0, resolved: 0, all: enriched.length };
+  for (const r of enriched) (counts as any)[r.urgency] += 1;
+
+  let filtered = enriched;
+  if (typeof urgencyFilter === 'string' && urgencyFilter && urgencyFilter !== 'all') {
+    filtered = enriched.filter((r) => r.urgency === urgencyFilter);
+  }
+
+  const sortMode = (sort as string) || 'urgency';
+  if (sortMode === 'urgency') {
+    // Default: most-painful-first. Oldest within each tier. Resolved rows
+    // sink to the bottom regardless of age.
+    filtered.sort((a, b) => {
+      const ta = tierRank[a.urgency] ?? 9;
+      const tb = tierRank[b.urgency] ?? 9;
+      if (ta !== tb) return ta - tb;
+      return b.age_seconds - a.age_seconds; // older first within tier
+    });
+  } else if (sortMode === 'oldest') {
+    filtered.sort((a, b) => b.age_seconds - a.age_seconds);
+  } else {
+    // 'newest'
+    filtered.sort((a, b) => a.age_seconds - b.age_seconds);
+  }
+
+  const rows = filtered.slice(0, limitNum);
+  return res.status(200).json({ success: true, data: rows, counts });
 });
 
 /**

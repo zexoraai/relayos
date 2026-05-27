@@ -1361,10 +1361,26 @@ async function submitCancel(jobId, index) {
   setTimeout(() => { renderFulfillment(); }, 800);
 }
 
+// Caretaker view state — survives within a session, resets on reload.
+// Default sort = urgency so the first row in the queue is the one most
+// likely to slip a collection window.
+let _caretakerFilters = { urgency: 'all', sort: 'urgency' };
+
 async function renderCaretaker() {
-  const [{ data: rulesRes }, { data: evalsRes }] = await Promise.all([api('GET', '/caretaker/rules'), api('GET', '/caretaker/evaluations?limit=50')]);
+  const params = new URLSearchParams();
+  params.set('limit', '100');
+  if (_caretakerFilters.urgency && _caretakerFilters.urgency !== 'all') params.set('urgency', _caretakerFilters.urgency);
+  if (_caretakerFilters.sort) params.set('sort', _caretakerFilters.sort);
+  const [{ data: rulesRes }, { data: evalsRes }] = await Promise.all([
+    api('GET', '/caretaker/rules'),
+    api('GET', '/caretaker/evaluations?' + params.toString()),
+  ]);
   const rules = rulesRes && rulesRes.success ? rulesRes.data : {};
   const evals = evalsRes && evalsRes.success ? evalsRes.data : [];
+  const counts = (evalsRes && evalsRes.success && evalsRes.counts) || {
+    critical: 0, high: 0, normal: 0, fresh: 0, resolved: 0, all: evals.length,
+  };
+
   let html = `<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">`;
   // Rules card
   html += `<div class="bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Rules</h3>`;
@@ -1380,13 +1396,74 @@ async function renderCaretaker() {
   html += `</div><button onclick="saveCaretakerRules()" class="mt-4 w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save Rules</button>`;
   html += `</div>`;
 
-  // Evaluations
-  html += `<div class="lg:col-span-2 bg-white rounded-3xl shadow-card p-6"><h3 class="font-bold text-base mb-4">Evaluations</h3>`;
-  if (evals.length === 0) { html += `<p class="text-sm text-gray-400">No evaluations yet</p>`; }
-  else {
-    html += `<div class="space-y-2 max-h-[500px] overflow-y-auto" id="caretaker-eval-list">`;
+  // Evaluations panel — header changes based on whether anything's
+  // critical so the operator can spot a slipping collection window
+  // from across the room.
+  html += `<div class="lg:col-span-2 bg-white rounded-3xl shadow-card p-6">`;
+  html += `<div class="flex items-center justify-between mb-2 flex-wrap gap-2">`;
+  html += `<h3 class="font-bold text-base">Evaluations</h3>`;
+  html += `<select onchange="setCaretakerFilter('sort', this.value)" class="px-3 py-1.5 bg-surface-100 rounded-xl text-xs border-0">` +
+    `<option value="urgency"${_caretakerFilters.sort==='urgency'?' selected':''}>Sort: Urgency</option>` +
+    `<option value="oldest"${_caretakerFilters.sort==='oldest'?' selected':''}>Sort: Oldest first</option>` +
+    `<option value="newest"${_caretakerFilters.sort==='newest'?' selected':''}>Sort: Newest first</option>` +
+    `</select>`;
+  html += `</div>`;
+
+  // Critical banner — only shows when something has been waiting > 24h.
+  if (counts.critical > 0) {
+    html += `<div class="mb-3 px-4 py-3 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-3">` +
+      `<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 pulse-dot mt-1 flex-shrink-0"></span>` +
+      `<div class="flex-1">` +
+        `<div class="text-sm font-bold text-red-700">${counts.critical} order${counts.critical === 1 ? '' : 's'} waiting over 24 hours</div>` +
+        `<div class="text-[11px] text-red-600">Collection window is slipping. These are at the top of the queue below.</div>` +
+      `</div>` +
+      `<button onclick="setCaretakerFilter('urgency', 'critical')" class="text-[11px] px-3 py-1 rounded-full bg-red-100 hover:bg-red-200 text-red-700 font-semibold whitespace-nowrap">Show only critical</button>` +
+    `</div>`;
+  }
+
+  // Filter chips with live counts.
+  const chipDef = [
+    ['all',      'All',      counts.all,      'bg-gray-100 hover:bg-gray-200 text-gray-700',     'bg-gray-700 text-white'],
+    ['critical', '> 24h',    counts.critical, 'bg-red-50 hover:bg-red-100 text-red-700',         'bg-red-500 text-white'],
+    ['high',     '8-24h',    counts.high,     'bg-amber-50 hover:bg-amber-100 text-amber-700',   'bg-amber-500 text-white'],
+    ['normal',   '2-8h',     counts.normal,   'bg-blue-50 hover:bg-blue-100 text-blue-700',      'bg-blue-500 text-white'],
+    ['fresh',    '< 2h',     counts.fresh,    'bg-green-50 hover:bg-green-100 text-green-700',   'bg-green-500 text-white'],
+    ['resolved', 'Resolved', counts.resolved, 'bg-gray-50 hover:bg-gray-100 text-gray-500',      'bg-gray-500 text-white'],
+  ];
+  html += `<div class="flex gap-1.5 flex-wrap mb-3">`;
+  chipDef.forEach(([key, label, count, idle, active]) => {
+    const isActive = _caretakerFilters.urgency === key;
+    html += `<button onclick="setCaretakerFilter('urgency', '${key}')" class="text-[11px] px-2.5 py-1 rounded-full font-medium transition-all ${isActive ? active : idle}">${label}<span class="ml-1 opacity-80">${count}</span></button>`;
+  });
+  html += `</div>`;
+
+  if (evals.length === 0) {
+    html += `<p class="text-sm text-gray-400">No evaluations match this filter.</p>`;
+  } else {
+    html += `<div class="space-y-2 max-h-[600px] overflow-y-auto pr-1" id="caretaker-eval-list">`;
     evals.forEach(e => {
       const flags = Array.isArray(e.flags)?e.flags:(e.flags||[]);
+
+      // Visual treatment per urgency tier — only applied to unresolved
+      // rows so the eye lands on what still needs work first.
+      const isResolved = !!e.resolution;
+      const tier = e.urgency || 'fresh';
+      let rowClass = 'border-gray-100';
+      if (!isResolved) {
+        if (tier === 'critical') rowClass = 'border-red-200 bg-red-50/40 border-l-4 border-l-red-500';
+        else if (tier === 'high') rowClass = 'border-amber-200 bg-amber-50/40 border-l-4 border-l-amber-500';
+        else if (tier === 'normal') rowClass = 'border-blue-100 border-l-4 border-l-blue-300';
+      }
+
+      // Age pill — humanize the age in hours/minutes/days.
+      const ageLabel = formatAgeShort(e.age_seconds || 0);
+      let agePillClass = 'bg-gray-100 text-gray-500';
+      if (!isResolved) {
+        if (tier === 'critical') agePillClass = 'bg-red-500 text-white font-bold';
+        else if (tier === 'high') agePillClass = 'bg-amber-500 text-white font-semibold';
+        else if (tier === 'normal') agePillClass = 'bg-blue-100 text-blue-700';
+        else agePillClass = 'bg-green-50 text-green-600';
+      }
 
       // After approval, the underlying pipeline_job moves processing -> completed/failed.
       // Surface that state here so the reviewer doesn't have to flip to the
@@ -1404,10 +1481,11 @@ async function renderCaretaker() {
         }
       }
 
-      html += `<div class="p-3 rounded-2xl border border-gray-100" data-eval-id="${e.id}">`;
-      // Header: timestamp + order ref + verdict badge + post-resolution pill
+      html += `<div class="p-3 rounded-2xl border ${rowClass}" data-eval-id="${e.id}">`;
+      // Header: age pill + timestamp + order ref + verdict badge + post-resolution pill
       html += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
       html += `<div class="flex items-center gap-2 min-w-0">`;
+      html += `<span class="text-[10px] px-2 py-0.5 rounded-full ${agePillClass} whitespace-nowrap" title="Age since the review opened">${escapeHtml(ageLabel)}</span>`;
       html += `<span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>`;
       if (e.order_number) {
         html += `<span class="text-[11px] text-gray-700 font-semibold truncate">#${escapeHtml(e.order_number)}${e.customer_name ? ' &middot; ' + escapeHtml(e.customer_name) : ''}</span>`;
@@ -1473,17 +1551,39 @@ async function renderCaretaker() {
   html += `</div></div>`;
   document.getElementById('tab-content').innerHTML = html;
 
-  // Auto-refresh while any evaluation has a still-moving pipeline job
-  // (resuming) so the operator sees the resume → submitted/failed transition
-  // land here, on the same tab they clicked Approve from. Stops once
-  // nothing is in flight.
+  // Auto-refresh:
+  //   - 3s while any approved evaluation has a resuming pipeline (so the
+  //     resume -> submitted/failed transition lands without a manual
+  //     refresh, same as before)
+  //   - 30s when there are unresolved critical/high rows (so a fresh
+  //     order aging into critical at, say, hour 8.5 gets noticed without
+  //     the operator hitting refresh)
+  //   - Off otherwise — nothing to watch.
   const inFlight = evals.some((e) => e.resolution === 'approved' && (e.pipeline_status === 'processing' || e.pipeline_status === 'pending_review'));
+  const hasUrgent = (counts.critical || 0) + (counts.high || 0) > 0;
   clearTimeout(window._caretakerTimer);
-  if (inFlight && currentTab === 'caretaker') {
-    window._caretakerTimer = setTimeout(() => {
-      if (currentTab === 'caretaker') renderCaretaker();
-    }, 3000);
+  if (currentTab === 'caretaker') {
+    if (inFlight) {
+      window._caretakerTimer = setTimeout(() => { if (currentTab === 'caretaker') renderCaretaker(); }, 3000);
+    } else if (hasUrgent) {
+      window._caretakerTimer = setTimeout(() => { if (currentTab === 'caretaker') renderCaretaker(); }, 30000);
+    }
   }
+}
+
+function setCaretakerFilter(key, value) {
+  _caretakerFilters[key] = value;
+  renderCaretaker();
+}
+
+// Convert an age in seconds into a tight human label: "3m" / "47m" /
+// "5h" / "23h" / "2d" / "11d". Used for the per-row pill so the operator
+// can grok urgency at a glance.
+function formatAgeShort(sec) {
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h';
+  return Math.floor(sec / 86400) + 'd';
 }
 async function saveCaretakerRules() {
   const body = { mode:document.getElementById('ck-mode').value, max_distance_km:parseInt(document.getElementById('ck-max-dist').value)||null, enabled:document.getElementById('ck-enabled').checked, llm_enabled:document.getElementById('ck-llm').checked, require_phone:document.getElementById('ck-phone').checked, require_customer_name:document.getElementById('ck-name').checked, require_line_items:document.getElementById('ck-items').checked, block_duplicate_order_number:document.getElementById('ck-dup').checked };
