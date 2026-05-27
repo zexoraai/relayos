@@ -11,6 +11,27 @@ export function renderTemplate(body: string, vars: Record<string, string | numbe
 }
 
 /**
+ * Default mapping from a template purpose to the domain event(s) that
+ * should trigger it. The whatsappEventSubscriber matches templates by
+ * `event_types @> [event_type]`, so a template with an empty event_types
+ * array will never fire — which means tenants seeded before this default
+ * was wired ended up silent. New tenants pick this up at seed time;
+ * existing tenants are backfilled by migration
+ * `20260601000003_backfill_whatsapp_template_event_types.ts`.
+ */
+export const DEFAULT_EVENT_TYPES_BY_PURPOSE: Record<string, string[]> = {
+  order_confirmed: ['order.confirmed'],
+  order_in_transit: ['order.in_transit'],
+  order_at_locker: ['order.at_locker'],
+  order_out_for_delivery: ['order.out_for_delivery'],
+  order_delivered: ['order.delivered'],
+  order_flagged: ['order.flagged'],
+  // order_details_updated is dispatched explicitly from the caretaker
+  // resolve handler, not via a domain event — leave its event_types empty.
+  order_details_updated: [],
+};
+
+/**
  * Sensible default templates seeded per tenant when WhatsApp is first configured.
  * Tenants can edit these in Settings.
  */

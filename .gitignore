@@ -66,3 +66,11 @@ log*.txt
 boot.txt
 vars.txt
 redeploy.txt
+
+
+# Local diagnostic / backfill scratch files (one-shot ops)
+diag.js
+diag.sql
+diag-out.txt
+backfill.js
+backfill-verify.js

@@ -3,7 +3,7 @@ import { getDb } from '../db/connection';
 import { decrypt, encrypt } from '../crypto';
 import { createChildLogger } from '../observability/logger';
 import { sendText, sendTemplate, WhatsAppCredentials } from './client';
-import { renderTemplate, DEFAULT_TEMPLATES } from './templates';
+import { renderTemplate, DEFAULT_TEMPLATES, DEFAULT_EVENT_TYPES_BY_PURPOSE } from './templates';
 import { onEvent, DomainEventType, DomainEventRow } from '../events';
 import { normalizePhone } from '../customers';
 import { withIdempotency, makeKey, IdempotencyInProgressError } from '../idempotency';
@@ -270,6 +270,10 @@ export async function saveSettings(args: {
         language_code: t.language_code,
         body_text: t.body_text,
         variables: JSON.stringify(t.variables),
+        // Without event_types the subscriber will never match this
+        // template against a domain event, so milestone notifications
+        // (order_in_transit, order_at_locker, ...) silently never fire.
+        event_types: JSON.stringify(DEFAULT_EVENT_TYPES_BY_PURPOSE[t.purpose] || []),
         enabled: true,
       })),
     );
