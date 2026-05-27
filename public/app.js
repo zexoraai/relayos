@@ -3021,14 +3021,14 @@ async function confirmLinkMeta(name, language, metaId, status, category) {
   const bodyText = bodyComp?.text || '';
   const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
   // Pick well-known variable names for known purposes; otherwise generic.
-  // The list order corresponds to Meta's positional parameters {{1}},
-  // {{2}}, {{3}} ... in body order. For SA WABA milestone templates the
-  // dominant pattern is greeting + waybill (tracking number), not
-  // order_number — so order_confirmed and order_in_transit list waybill
-  // in slot 2. Operators can edit afterwards if their template uses a
-  // different shape.
+  // Slot order matches Meta's positional placeholders {{1}}, {{2}} ...
+  // Choices map to mutilife's actual approved templates:
+  //   order_confirmed   : greeting + order number
+  //   order_in_transit  : greeting + waybill (used as the tracking number)
+  //   order_at_locker   : greeting + collection PIN
+  // Operators can edit afterwards if their template uses a different shape.
   const VAR_MAP = {
-    order_confirmed: ['customer_name', 'waybill', 'order_number'],
+    order_confirmed: ['customer_name', 'order_number', 'waybill'],
     order_in_transit: ['customer_name', 'waybill', 'order_number'],
     order_at_locker: ['customer_name', 'pincode', 'order_number'],
     order_out_for_delivery: ['customer_name', 'order_number'],
@@ -3064,7 +3064,7 @@ async function reimportMetaTemplate(name, language, metaId, purpose, status, cat
   const bodyText = bodyComp?.text || '';
   const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
   const VAR_MAP = {
-    order_confirmed: ['customer_name', 'waybill', 'order_number'],
+    order_confirmed: ['customer_name', 'order_number', 'waybill'],
     order_in_transit: ['customer_name', 'waybill', 'order_number'],
     order_at_locker: ['customer_name', 'pincode', 'order_number'],
     order_out_for_delivery: ['customer_name', 'order_number'],
