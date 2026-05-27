@@ -3021,14 +3021,20 @@ async function confirmLinkMeta(name, language, metaId, status, category) {
   const bodyText = bodyComp?.text || '';
   const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
   // Pick well-known variable names for known purposes; otherwise generic.
+  // The list order corresponds to Meta's positional parameters {{1}},
+  // {{2}}, {{3}} ... in body order. For SA WABA milestone templates the
+  // dominant pattern is greeting + waybill (tracking number), not
+  // order_number — so order_confirmed and order_in_transit list waybill
+  // in slot 2. Operators can edit afterwards if their template uses a
+  // different shape.
   const VAR_MAP = {
-    order_confirmed: ['customer_name', 'order_number', 'waybill'],
-    order_in_transit: ['customer_name', 'order_number', 'waybill'],
-    order_at_locker: ['customer_name', 'order_number', 'pincode'],
+    order_confirmed: ['customer_name', 'waybill', 'order_number'],
+    order_in_transit: ['customer_name', 'waybill', 'order_number'],
+    order_at_locker: ['customer_name', 'pincode', 'order_number'],
     order_out_for_delivery: ['customer_name', 'order_number'],
     order_delivered: ['customer_name', 'order_number'],
     order_flagged: ['customer_name', 'order_number'],
-    order_details_updated: ['customer_name', 'order_number', 'change_summary'],
+    order_details_updated: ['customer_name', 'change_summary', 'order_number'],
   };
   const variables = (VAR_MAP[purpose] || ['var_1', 'var_2', 'var_3', 'var_4']).slice(0, placeholders);
 
@@ -3058,13 +3064,13 @@ async function reimportMetaTemplate(name, language, metaId, purpose, status, cat
   const bodyText = bodyComp?.text || '';
   const placeholders = (bodyText.match(/\{\{(\d+)\}\}/g) || []).length;
   const VAR_MAP = {
-    order_confirmed: ['customer_name', 'order_number', 'waybill'],
-    order_in_transit: ['customer_name', 'order_number', 'waybill'],
-    order_at_locker: ['customer_name', 'order_number', 'pincode'],
+    order_confirmed: ['customer_name', 'waybill', 'order_number'],
+    order_in_transit: ['customer_name', 'waybill', 'order_number'],
+    order_at_locker: ['customer_name', 'pincode', 'order_number'],
     order_out_for_delivery: ['customer_name', 'order_number'],
     order_delivered: ['customer_name', 'order_number'],
     order_flagged: ['customer_name', 'order_number'],
-    order_details_updated: ['customer_name', 'order_number', 'change_summary'],
+    order_details_updated: ['customer_name', 'change_summary', 'order_number'],
   };
   const variables = (VAR_MAP[purpose] || ['var_1', 'var_2', 'var_3', 'var_4']).slice(0, placeholders);
   const { data } = await api('POST', '/whatsapp/templates/meta/import', {

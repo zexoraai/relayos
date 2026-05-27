@@ -138,7 +138,13 @@ export async function dispatchByPurpose(args: {
     return { sent: false, skipped_reason: 'Recipient phone is missing or invalid' };
   }
 
-  const renderedBody = renderTemplate(template.body_text, args.variables);
+  // Pass `template.variables` as the ordered list so positional `{{n}}`
+  // placeholders (Meta's approved-template format) render with the
+  // corresponding value from `args.variables`. Without this, the audit
+  // log shows empty placeholders even when the actual Meta send carried
+  // the right parameters.
+  const orderedVars = Array.isArray(template.variables) ? template.variables : [];
+  const renderedBody = renderTemplate(template.body_text, args.variables, orderedVars);
 
   // Pre-insert log row in queued state
   const logId = uuidv4();

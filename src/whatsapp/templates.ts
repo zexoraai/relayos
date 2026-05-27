@@ -1,12 +1,43 @@
 /**
- * Template rendering: replaces {{var}} placeholders with values from the variables map.
- * We use simple curly-brace placeholders for free-text messages. When using a Meta-approved
- * template (template_name set), the body_text is what gets sent in the body parameters.
+ * Template rendering: replaces placeholder tokens with values from the
+ * variables map. Two placeholder formats are supported because Meta and
+ * RelayOS use different conventions:
+ *
+ *   1. Named placeholders like `{{customer_name}}` — RelayOS's native
+ *      format. Looked up directly on `vars`.
+ *
+ *   2. Positional placeholders like `{{1}}`, `{{2}}` — Meta's format for
+ *      approved templates. Resolved by looking up the variable name at
+ *      `orderedVars[n - 1]` (when provided) and then reading that name
+ *      from `vars`. Without `orderedVars`, positional placeholders fall
+ *      back to looking up the digit string itself on `vars` (so a caller
+ *      can pass `{ '1': 'Marlize Gouws' }` directly if it knows the
+ *      positional shape).
+ *
+ * The split matters for the audit-log render: `whatsapp_messages.body`
+ * is generated from the template body, and when we have a Meta-approved
+ * template stored verbatim ({{1}} / {{2}} format), the old renderer left
+ * placeholders as empty strings — which made the audit log look like
+ * the customer received an empty greeting. With ordered variable names
+ * we can show the resolved body in the same shape Meta delivers.
  */
-export function renderTemplate(body: string, vars: Record<string, string | number | null | undefined>): string {
+export function renderTemplate(
+  body: string,
+  vars: Record<string, string | number | null | undefined>,
+  orderedVars?: string[],
+): string {
   return body.replace(/\{\{\s*([\w_]+)\s*\}\}/g, (_match, key: string) => {
-    const v = vars[key];
-    return v === null || v === undefined ? '' : String(v);
+    let value: any;
+    if (/^\d+$/.test(key)) {
+      // Positional placeholder. Try orderedVars first, then fall back to
+      // a direct numeric-keyed lookup.
+      const idx = parseInt(key, 10) - 1;
+      const namedKey = orderedVars && orderedVars[idx];
+      value = namedKey ? vars[namedKey] : vars[key];
+    } else {
+      value = vars[key];
+    }
+    return value === null || value === undefined ? '' : String(value);
   });
 }
 
