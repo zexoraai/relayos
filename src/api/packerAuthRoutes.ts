@@ -163,13 +163,13 @@ router.post('/signup', async (req: Request, res: Response) => {
   }
 
   const token = generatePackerToken({ packerId: packer.id, email: packer.email });
-  log.info({ packerId: packer.id, linkedTenant: linkInfo?.tenant_id }, 'Packer signup');
+  log.info({ packerId: packer.id, linkedTenant: (linkInfo as any)?.tenant_id }, 'Packer signup');
   return res.status(201).json({
     success: true,
     data: {
       packer: { id: packer.id, email: packer.email, status: packer.status },
       token,
-      linked_tenant_id: linkInfo?.tenant_id || null,
+      linked_tenant_id: (linkInfo as any)?.tenant_id || null,
     },
   });
 });
@@ -230,7 +230,7 @@ router.post('/accept', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
     return res.status(400).json({ success: false, error: { code: 'INVALID_INVITE', message: 'Invite token is unknown, already used, or expired' } });
   }
 
-  log.info({ packerId, linkedTenant: result.tenant_id }, 'Packer accepted invite via authenticated flow');
+  log.info({ packerId, linkedTenant: (result as any).tenant_id }, 'Packer accepted invite via authenticated flow');
   return res.status(200).json({ success: true, data: result });
 });
 
