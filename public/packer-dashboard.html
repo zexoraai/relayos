@@ -39,26 +39,28 @@
         <button onclick="logout()" class="text-xs text-gray-400 hover:text-gray-700 underline">Log out</button>
       </div>
 
-      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 text-sm text-amber-700">
-        <div class="font-semibold mb-1">Phase 1 / 2 are live</div>
-        Your packer account is registered. The full packer dashboard
-        (linked tenants, profile, packing counts, assigned orders) ships
-        in the next deploy. For now this page just confirms your account
-        and shows your linked tenants.
+      <!-- Pending invites (only shown when invites exist for this email) -->
+      <div id="invites-section" class="hidden mb-6">
+        <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
+        <div id="invites" class="space-y-2"></div>
       </div>
 
       <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
       <div id="links-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
-        You have not been linked to a tenant yet. A tenant must invite
-        you via email; click the accept link in the invitation to join.
+        You have not been linked to a tenant yet. A tenant must invite you;
+        when they do, the invite shows up here for you to accept.
       </div>
       <div id="links" class="space-y-2"></div>
+
+      <div id="action-feedback" class="hidden mt-4 text-sm rounded-xl p-3"></div>
     </div>
 
   </div>
 </div>
 
 <script>
+let _packerEmail = null;
+
 async function load() {
   const token = localStorage.getItem('packerToken');
   if (!token) {
@@ -79,6 +81,18 @@ async function load() {
       return;
     }
     renderProfile(data.data);
+
+    // If the URL came in with ?token=... (clicked an invite link while
+    // already logged in), auto-accept it now.
+    const params = new URLSearchParams(window.location.search);
+    const inviteFromUrl = params.get('token');
+    if (inviteFromUrl) {
+      // Strip the token from the URL so a refresh doesn't re-trigger.
+      history.replaceState({}, '', window.location.pathname);
+      await acceptInvite(inviteFromUrl);
+      // Reload the profile to pick up the new link
+      await load();
+    }
   } catch (e) {
     document.getElementById('loading').classList.add('hidden');
     document.getElementById('not-authed').classList.remove('hidden');
@@ -88,16 +102,51 @@ async function load() {
 function renderProfile(d) {
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('authed').classList.remove('hidden');
+  _packerEmail = d.packer.email;
   const name = d.packer.full_name || d.packer.email;
   document.getElementById('hello').textContent = 'Welcome, ' + name;
   document.getElementById('meta').textContent = d.packer.email +
     (d.packer.business_name ? ' \u00b7 ' + d.packer.business_name : '');
 
-  const links = d.links || [];
+  renderInvites(d.pending_invites || []);
+  renderLinks(d.links || []);
+}
+
+function renderInvites(invites) {
+  const section = document.getElementById('invites-section');
+  const list = document.getElementById('invites');
+  if (!invites.length) {
+    section.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  section.classList.remove('hidden');
+  list.innerHTML = invites.map((inv) => {
+    const expires = new Date(inv.expires_at).toLocaleDateString();
+    const safeToken = String(inv.token || '').replace(/'/g, "\\'");
+    return (
+      '<div class="border border-amber-200 bg-amber-50 rounded-xl p-4 flex items-center justify-between gap-3">' +
+        '<div class="min-w-0">' +
+          '<div class="font-semibold text-sm truncate">' + escapeHtml(inv.tenant_email || '(unknown tenant)') + '</div>' +
+          '<div class="text-xs text-gray-600 mt-0.5">Wants you on their packer roster' +
+            (inv.note ? ' \u00b7 "' + escapeHtml(inv.note) + '"' : '') +
+          '</div>' +
+          '<div class="text-[11px] text-gray-500 mt-0.5">Expires ' + expires + ' \u00b7 weight ' + inv.load_weight + '</div>' +
+        '</div>' +
+        '<div class="flex gap-2 flex-shrink-0">' +
+          '<button onclick="acceptInvite(\'' + safeToken + '\')" class="px-4 py-2 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-xs">Accept</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function renderLinks(links) {
   const empty = document.getElementById('links-empty');
   const list = document.getElementById('links');
   if (links.length === 0) {
     empty.classList.remove('hidden');
+    list.innerHTML = '';
     return;
   }
   empty.classList.add('hidden');
@@ -123,13 +172,47 @@ function renderProfile(d) {
   }).join('');
 }
 
+async function acceptInvite(token) {
+  const jwt = localStorage.getItem('packerToken');
+  if (!jwt) {
+    showFeedback('You must be logged in', 'error');
+    return;
+  }
+  try {
+    const res = await fetch('/packer-auth/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + jwt },
+      body: JSON.stringify({ invite_token: token }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showFeedback(data?.error?.message || 'Could not accept invite', 'error');
+      return;
+    }
+    showFeedback('Invite accepted. You are now linked.', 'success');
+    await load();
+  } catch (e) {
+    showFeedback(e.message || 'Network error', 'error');
+  }
+}
+
+function showFeedback(msg, kind) {
+  const el = document.getElementById('action-feedback');
+  el.textContent = msg;
+  el.className = 'mt-4 text-sm rounded-xl p-3 ' + (
+    kind === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+  );
+  el.classList.remove('hidden');
+  setTimeout(() => { el.classList.add('hidden'); }, 4000);
+}
+
 function logout() {
   localStorage.removeItem('packerToken');
   window.location.href = '/packer-login';
 }
 
 function escapeHtml(s) {
-  return (s || '')
+  return (s == null ? '' : String(s))
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

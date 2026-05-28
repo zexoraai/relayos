@@ -88,6 +88,14 @@ form.addEventListener('submit', async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
+      // If the email is already registered AND we have an invite
+      // token, route them to login with the token preserved so the
+      // accept flow happens after they sign in. Otherwise show the
+      // server's error in place.
+      if (res.status === 409 && inviteToken) {
+        window.location.href = '/packer-login?token=' + encodeURIComponent(inviteToken);
+        return;
+      }
       showError(data?.error?.message || 'Signup failed');
       return;
     }

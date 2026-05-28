@@ -265,7 +265,22 @@ router.get('/me', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, 
       't.id as tenant_id', 't.email as tenant_email',
     );
 
-  return res.status(200).json({ success: true, data: { packer, links } });
+  // Pending invites addressed to this packer's email. The packer
+  // accepts these via POST /packer-auth/accept which runs the same
+  // token-resolution path as the signup flow.
+  const pendingInvites = await db('packer_invites as i')
+    .join('tenants as t', 't.id', 'i.tenant_id')
+    .where('i.email', packer.email)
+    .where('i.status', 'pending')
+    .where('i.expires_at', '>', new Date())
+    .orderBy('i.created_at', 'desc')
+    .select(
+      'i.id', 'i.token', 'i.load_weight', 'i.note',
+      'i.expires_at', 'i.created_at',
+      't.id as tenant_id', 't.email as tenant_email',
+    );
+
+  return res.status(200).json({ success: true, data: { packer, links, pending_invites: pendingInvites } });
 });
 
 // ---------------------------------------------------------------------------
