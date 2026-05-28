@@ -61,6 +61,7 @@
     knowledge: 'knowledge.view',
     users: 'users.view',
     settings: 'settings.view',
+    packers: 'packers.view',
     usage: 'agents.usage.view',
     failed: 'dlq.view',
     health: 'health.view',

@@ -51,6 +51,7 @@ setvar.txt
 push*.txt
 up*.txt
 deploy*.txt
+commitmsg.txt
 deps.json
 applogs.txt
 liveerr.txt

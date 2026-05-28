@@ -373,7 +373,7 @@ function switchTab(tab) {
   }
   currentTab = tab;
   document.getElementById('page-title').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
-  const subtitles = { overview:'Welcome back', orders:'Every order in one place', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
+  const subtitles = { overview:'Welcome back', orders:'Every order in one place', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', packers:'Invite and manage independent packers', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
   document.getElementById('page-subtitle').textContent = subtitles[tab] || '';
   document.querySelectorAll('.sidebar-item').forEach(li => li.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(li => { const txt = li.querySelector('span'); if(txt && txt.textContent.toLowerCase()===tab) li.classList.add('active'); });
@@ -394,6 +394,7 @@ function switchTab(tab) {
   else if (tab === 'knowledge') renderKnowledge();
   else if (tab === 'customers') renderCustomers();
   else if (tab === 'users') renderUsers();
+  else if (tab === 'packers') renderPackers();
   else if (tab === 'usage') renderUsage();
   else if (tab === 'failed') renderFailed();
   else if (tab === 'health') renderHealth();
@@ -4640,4 +4641,300 @@ async function confirmCollection(orderId) {
   const { data } = await api('POST', `/manual/collection-queue/${orderId}/confirm`, {});
   if (data.success) { toast('Collection confirmed', 'success'); renderCollections(); }
   else toast(data.error?.message || 'Failed', 'error');
+}
+
+
+// ============================================================
+// Independent Packers tab
+// ------------------------------------------------------------
+// Tenant-side management of relationships with independent packers.
+// Backed by /packers/links + /packers/invites (see src/api/packersRoutes.ts).
+//
+// Permissions:
+//   packers.view    — see this tab + the table
+//   packers.invite  — Invite + Revoke pending invites
+//   packers.manage  — pause/resume, set load_weight, unlink
+// ============================================================
+
+async function renderPackers() {
+  const { data } = await api('GET', '/packers/links');
+  if (!data || !data.success) {
+    document.getElementById('tab-content').innerHTML = emptyState('Failed to load packers', data?.error?.message || '');
+    return;
+  }
+  const links = data.data.links || [];
+  const invites = data.data.invites || [];
+  const pendingInvites = invites.filter(i => i.status === 'pending');
+  const recentInvites = invites.filter(i => i.status !== 'pending').slice(0, 8);
+
+  const canInvite = window.RelayPermissions
+    ? window.RelayPermissions.hasPermission(currentUserPermissions, 'packers.invite')
+    : true;
+  const canManage = window.RelayPermissions
+    ? window.RelayPermissions.hasPermission(currentUserPermissions, 'packers.manage')
+    : true;
+
+  const activeCount = links.filter(l => l.status === 'active').length;
+  const pausedCount = links.filter(l => l.status === 'paused').length;
+
+  let html = '';
+
+  // Top bar
+  html += `<div class="flex items-center justify-between mb-6">`;
+  html += `<div>`;
+  html += `<h3 class="text-lg font-bold">Independent Packers</h3>`;
+  html += `<p class="text-sm text-gray-400 mt-0.5">${activeCount} active · ${pausedCount} paused · ${pendingInvites.length} pending invite${pendingInvites.length===1?'':'s'}</p>`;
+  html += `</div>`;
+  if (canInvite) {
+    html += `<button onclick="showPackerInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Invite Packer</button>`;
+  }
+  html += `</div>`;
+
+  // Linked packers table
+  html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden mb-6">`;
+  html += `<div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">`;
+  html += `<div class="font-semibold text-sm">Linked packers</div>`;
+  html += `</div>`;
+  if (links.length === 0) {
+    html += emptyState('No linked packers yet', canInvite ? 'Click "Invite Packer" to send your first invite.' : 'No active packer relationships for this tenant.');
+  } else {
+    html += `<table class="w-full text-sm">`;
+    html += `<thead><tr class="border-b border-gray-100">`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Packer</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Status</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Load weight</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Collection</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Orders</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Linked</th>`;
+    if (canManage) html += `<th class="px-5 py-3"></th>`;
+    html += `</tr></thead><tbody>`;
+    links.forEach(l => {
+      const initial = (l.packer_name || l.packer_email || '?')[0].toUpperCase();
+      const display = l.packer_name || l.packer_email || '(unknown)';
+      const business = l.packer_business_name ? `<div class="text-xs text-gray-400">${escapeHtml(l.packer_business_name)}</div>` : '';
+      const phone = l.packer_phone ? `<div class="text-xs text-gray-400">${escapeHtml(l.packer_phone)}</div>` : '';
+      const linkedAt = l.linked_at ? new Date(l.linked_at).toLocaleDateString('en-ZA', { day:'numeric', month:'short', year:'numeric' }) : '—';
+      const lastAssigned = l.last_assigned_at ? new Date(l.last_assigned_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : 'Never';
+
+      // Collection profile cell
+      let coll = '';
+      if (l.collection_terminal_id) {
+        coll = `<div class="text-xs">Locker <span class="font-mono">${escapeHtml(String(l.collection_terminal_id))}</span></div>`;
+        if (l.collection_locker_name) coll += `<div class="text-xs text-gray-400">${escapeHtml(l.collection_locker_name)}</div>`;
+      } else if (l.collection_door_address) {
+        const a = l.collection_door_address || {};
+        const parts = [a.street, a.suburb, a.city].filter(Boolean).join(', ');
+        coll = `<div class="text-xs">Door</div>`;
+        if (parts) coll += `<div class="text-xs text-gray-400">${escapeHtml(parts)}</div>`;
+      } else {
+        coll = `<span class="text-xs text-gray-400">—</span>`;
+      }
+
+      // Status pill
+      let statusBadge = '';
+      if (l.status === 'active') statusBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-green-50 text-green-700">Active</span>`;
+      else if (l.status === 'paused') statusBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700">Paused</span>`;
+      else if (l.status === 'kicked') statusBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-50 text-red-700">Unlinked</span>`;
+      else statusBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-700">${escapeHtml(l.status||'')}</span>`;
+
+      html += `<tr class="border-b border-gray-50 hover:bg-surface-100 transition-all">`;
+      html += `<td class="px-5 py-3"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm">${initial}</div><div><div class="font-medium">${escapeHtml(display)}</div><div class="text-xs text-gray-400">${escapeHtml(l.packer_email||'')}</div>${business}${phone}</div></div></td>`;
+      html += `<td class="px-5 py-3">${statusBadge}</td>`;
+      html += `<td class="px-5 py-3"><span class="font-mono text-sm">${l.load_weight ?? 1}</span></td>`;
+      html += `<td class="px-5 py-3">${coll}</td>`;
+      html += `<td class="px-5 py-3"><div class="text-sm font-semibold">${l.orders_assigned_count ?? 0}</div><div class="text-xs text-gray-400">Last: ${lastAssigned}</div></td>`;
+      html += `<td class="px-5 py-3 text-xs text-gray-500">${linkedAt}</td>`;
+      if (canManage) {
+        html += `<td class="px-5 py-3 text-right whitespace-nowrap">`;
+        if (l.status === 'active' || l.status === 'paused') {
+          html += `<button onclick="editPackerLink('${l.id}', ${l.load_weight ?? 1}, '${escapeHtml(l.status||'')}', ${JSON.stringify(l.note||'').replace(/"/g,'&quot;')})" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs transition-all">Edit</button> `;
+          if (l.status === 'active') {
+            html += `<button onclick="togglePackerLink('${l.id}', 'paused')" class="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold rounded-full text-xs transition-all">Pause</button> `;
+          } else {
+            html += `<button onclick="togglePackerLink('${l.id}', 'active')" class="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 font-semibold rounded-full text-xs transition-all">Resume</button> `;
+          }
+          html += `<button onclick="unlinkPacker('${l.id}', '${escapeHtml(display)}')" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Unlink</button>`;
+        }
+        html += `</td>`;
+      }
+      html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  // Pending invites
+  html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden mb-6">`;
+  html += `<div class="px-5 py-3 border-b border-gray-100 font-semibold text-sm">Pending invites (${pendingInvites.length})</div>`;
+  if (pendingInvites.length === 0) {
+    html += `<div class="px-5 py-6 text-sm text-gray-400">No invites currently outstanding.</div>`;
+  } else {
+    html += `<table class="w-full text-sm">`;
+    html += `<thead><tr class="border-b border-gray-100">`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Email</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Load weight</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Sent</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Expires</th>`;
+    html += `<th class="px-5 py-3"></th>`;
+    html += `</tr></thead><tbody>`;
+    pendingInvites.forEach(inv => {
+      const sent = inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-ZA', { day:'numeric', month:'short' }) : '—';
+      const exp = inv.expires_at ? new Date(inv.expires_at).toLocaleDateString('en-ZA', { day:'numeric', month:'short' }) : '—';
+      html += `<tr class="border-b border-gray-50 hover:bg-surface-100 transition-all">`;
+      html += `<td class="px-5 py-3 font-medium">${escapeHtml(inv.email)}</td>`;
+      html += `<td class="px-5 py-3 font-mono">${inv.load_weight ?? 1}</td>`;
+      html += `<td class="px-5 py-3 text-xs text-gray-500">${sent}</td>`;
+      html += `<td class="px-5 py-3 text-xs text-gray-500">${exp}</td>`;
+      html += `<td class="px-5 py-3 text-right whitespace-nowrap">`;
+      if (canInvite) {
+        html += `<button onclick="revokePackerInvite('${inv.id}', '${escapeHtml(inv.email)}')" class="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-500 font-semibold rounded-full text-xs transition-all">Revoke</button>`;
+      }
+      html += `</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  // Recent invite history (collapsed)
+  if (recentInvites.length > 0) {
+    html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden">`;
+    html += `<div class="px-5 py-3 border-b border-gray-100 font-semibold text-sm">Recent invite history</div>`;
+    html += `<table class="w-full text-sm">`;
+    html += `<thead><tr class="border-b border-gray-100">`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Email</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Status</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Sent</th>`;
+    html += `</tr></thead><tbody>`;
+    recentInvites.forEach(inv => {
+      const sent = inv.created_at ? new Date(inv.created_at).toLocaleDateString('en-ZA', { day:'numeric', month:'short' }) : '—';
+      let pill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-700">${escapeHtml(inv.status)}</span>`;
+      if (inv.status === 'accepted') pill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-green-50 text-green-700">Accepted</span>`;
+      else if (inv.status === 'declined') pill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-50 text-red-700">Declined</span>`;
+      else if (inv.status === 'revoked') pill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-600">Revoked</span>`;
+      else if (inv.status === 'expired') pill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700">Expired</span>`;
+      html += `<tr class="border-b border-gray-50">`;
+      html += `<td class="px-5 py-3">${escapeHtml(inv.email)}</td>`;
+      html += `<td class="px-5 py-3">${pill}</td>`;
+      html += `<td class="px-5 py-3 text-xs text-gray-500">${sent}</td>`;
+      html += `</tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  document.getElementById('tab-content').innerHTML = html;
+}
+
+function showPackerInviteModal() {
+  const body = `
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Packer email</label>
+        <input id="pinv-email" type="email" placeholder="packer@example.com" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
+        <p class="text-xs text-gray-400 mt-1">They'll get a link to create their packer account and accept the invite.</p>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Load weight</label>
+        <input id="pinv-weight" type="number" min="1" max="10" value="1" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
+        <p class="text-xs text-gray-400 mt-1">1 = standard share, higher = bigger share of orders. Range 1–10.</p>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Note (optional)</label>
+        <textarea id="pinv-note" rows="2" placeholder="e.g. handles fragile only" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400"></textarea>
+      </div>
+      <button onclick="submitPackerInvite()" class="w-full py-3 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full transition-all">Send invite</button>
+    </div>`;
+  openModal('Invite independent packer', body);
+}
+
+async function submitPackerInvite() {
+  const email = (document.getElementById('pinv-email').value || '').trim();
+  const weight = parseInt(document.getElementById('pinv-weight').value || '1', 10) || 1;
+  const note = (document.getElementById('pinv-note').value || '').trim();
+  if (!email || !email.includes('@')) { toast('Valid email required', 'error'); return; }
+  const { data } = await api('POST', '/packers/invites', { email, load_weight: weight, note: note || undefined });
+  if (!data || !data.success) {
+    toast(data?.error?.message || 'Failed to invite', 'error');
+    return;
+  }
+  closeModal();
+  // Show the accept URL so the operator can copy/paste it (no email service yet).
+  const fullUrl = window.location.origin + (data.data.accept_url || '');
+  const body = `
+    <div class="space-y-3">
+      <p class="text-sm text-gray-700">Invite created for <strong>${escapeHtml(email)}</strong>. Send this link to the packer:</p>
+      <div class="bg-surface-100 rounded-xl p-3 font-mono text-xs break-all">${escapeHtml(fullUrl)}</div>
+      <button onclick="copyPackerInviteLink('${escapeHtml(fullUrl)}'); closeModal();" class="w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Copy link & close</button>
+    </div>`;
+  openModal('Invite link', body);
+  renderPackers();
+}
+
+function copyPackerInviteLink(url) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => toast('Link copied', 'success'), () => toast('Copy failed; select manually', 'info'));
+  } else {
+    toast('Copy not supported; select manually', 'info');
+  }
+}
+
+async function revokePackerInvite(id, email) {
+  if (!confirm('Revoke invite for ' + email + '?')) return;
+  const { data } = await api('POST', `/packers/invites/${id}/revoke`);
+  if (data && data.success) { toast('Invite revoked', 'info'); renderPackers(); }
+  else toast(data?.error?.message || 'Failed', 'error');
+}
+
+async function togglePackerLink(id, newStatus) {
+  const { data } = await api('PUT', `/packers/links/${id}`, { status: newStatus });
+  if (data && data.success) {
+    toast(newStatus === 'paused' ? 'Packer paused' : 'Packer resumed', 'success');
+    renderPackers();
+  } else {
+    toast(data?.error?.message || 'Failed', 'error');
+  }
+}
+
+function editPackerLink(id, currentWeight, currentStatus, currentNote) {
+  const body = `
+    <div class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Load weight</label>
+        <input id="plink-weight" type="number" min="1" max="10" value="${currentWeight}" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Status</label>
+        <select id="plink-status" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">
+          <option value="active" ${currentStatus==='active'?'selected':''}>Active</option>
+          <option value="paused" ${currentStatus==='paused'?'selected':''}>Paused</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Note</label>
+        <textarea id="plink-note" rows="2" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">${escapeHtml(currentNote || '')}</textarea>
+      </div>
+      <button onclick="submitEditPackerLink('${id}')" class="w-full py-3 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full transition-all">Save</button>
+    </div>`;
+  openModal('Edit packer link', body);
+}
+
+async function submitEditPackerLink(id) {
+  const weight = parseInt(document.getElementById('plink-weight').value || '1', 10) || 1;
+  const status = document.getElementById('plink-status').value;
+  const note = (document.getElementById('plink-note').value || '').trim();
+  const { data } = await api('PUT', `/packers/links/${id}`, { load_weight: weight, status, note });
+  if (data && data.success) {
+    closeModal();
+    toast('Link updated', 'success');
+    renderPackers();
+  } else {
+    toast(data?.error?.message || 'Failed', 'error');
+  }
+}
+
+async function unlinkPacker(id, displayName) {
+  const reason = prompt('Unlink ' + displayName + '?\n\nOptional reason (max 30 chars):');
+  if (reason === null) return;
+  const { data } = await api('POST', `/packers/links/${id}/unlink`, { reason: (reason || '').slice(0, 30) });
+  if (data && data.success) { toast('Packer unlinked', 'info'); renderPackers(); }
+  else toast(data?.error?.message || 'Failed', 'error');
 }
