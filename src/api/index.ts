@@ -71,6 +71,18 @@ export function createApiServer(): express.Application {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Independent-packer static pages — registered BEFORE the /packer API
+  // mount so a GET to /packer/dashboard resolves to the HTML page,
+  // not packerRoutes (which is the tenant-side packer queue API and
+  // would otherwise return 401 because the packer JWT isn't a tenant
+  // JWT). Order matters: Express resolves routes in registration order
+  // and `app.use('/packer', packerRoutes)` matches every path starting
+  // with /packer.
+  const publicDir = path.join(__dirname, '../../public');
+  app.get('/packer-signup', (_req, res) => res.sendFile(path.join(publicDir, 'packer-signup.html')));
+  app.get('/packer-login', (_req, res) => res.sendFile(path.join(publicDir, 'packer-login.html')));
+  app.get('/packer/dashboard', (_req, res) => res.sendFile(path.join(publicDir, 'packer-dashboard.html')));
+
   // API Routes
   app.use('/auth', authLimiter, authRoutes);
   app.use('/packer-auth', authLimiter, packerAuthRoutes);

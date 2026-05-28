@@ -15,6 +15,7 @@ const distIndex = path.join(__dirname, '../../public/dist/index.html');
 const legacyIndex = path.join(__dirname, '../../public/legacy.html');
 const packerSignupHtml = path.join(__dirname, '../../public/packer-signup.html');
 const packerLoginHtml = path.join(__dirname, '../../public/packer-login.html');
+const packerDashboardHtml = path.join(__dirname, '../../public/packer-dashboard.html');
 
 // Legacy fallback
 router.get('/legacy.html', (_req: Request, res: Response) => {
@@ -29,6 +30,9 @@ router.get('/packer-signup', (_req: Request, res: Response) => {
 });
 router.get('/packer-login', (_req: Request, res: Response) => {
   res.sendFile(packerLoginHtml);
+});
+router.get('/packer/dashboard', (_req: Request, res: Response) => {
+  res.sendFile(packerDashboardHtml);
 });
 
 // SPA catch-all: any route that doesn't match an API or static file → serve the SPA shell

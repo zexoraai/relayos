@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RelayOS Packer</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: linear-gradient(135deg, #fefdfb 0%, #fdf8f0 50%, #faf3e8 100%); min-height: 100vh; }
+  .card { background: #fff; border-radius: 24px; box-shadow: 0 12px 40px rgba(0,0,0,.08); }
+</style>
+</head>
+<body class="text-gray-900 antialiased">
+<div class="min-h-screen flex items-center justify-center p-4">
+  <div class="card w-full max-w-2xl p-8">
+
+    <!-- Initial loading state -->
+    <div id="loading" class="text-center py-8">
+      <div class="text-sm text-gray-400">Loading your packer profile...</div>
+    </div>
+
+    <!-- Not authenticated -->
+    <div id="not-authed" class="hidden text-center py-8">
+      <h1 class="text-2xl font-bold mb-2">You are not signed in</h1>
+      <p class="text-sm text-gray-500 mb-5">Sign in to your packer account to see your linked tenants and orders.</p>
+      <div class="flex justify-center gap-2">
+        <a href="/packer-login" class="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-sm">Log in</a>
+        <a href="/packer-signup" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Sign up</a>
+      </div>
+    </div>
+
+    <!-- Authenticated content -->
+    <div id="authed" class="hidden">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-bold mb-1" id="hello">Welcome</h1>
+          <p class="text-sm text-gray-500" id="meta"></p>
+        </div>
+        <button onclick="logout()" class="text-xs text-gray-400 hover:text-gray-700 underline">Log out</button>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 text-sm text-amber-700">
+        <div class="font-semibold mb-1">Phase 1 / 2 are live</div>
+        Your packer account is registered. The full packer dashboard
+        (linked tenants, profile, packing counts, assigned orders) ships
+        in the next deploy. For now this page just confirms your account
+        and shows your linked tenants.
+      </div>
+
+      <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
+      <div id="links-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
+        You have not been linked to a tenant yet. A tenant must invite
+        you via email; click the accept link in the invitation to join.
+      </div>
+      <div id="links" class="space-y-2"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+async function load() {
+  const token = localStorage.getItem('packerToken');
+  if (!token) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('not-authed').classList.remove('hidden');
+    return;
+  }
+  try {
+    const res = await fetch('/packer-auth/me', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      // Stale token: clear and show signed-out state
+      localStorage.removeItem('packerToken');
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('not-authed').classList.remove('hidden');
+      return;
+    }
+    renderProfile(data.data);
+  } catch (e) {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('not-authed').classList.remove('hidden');
+  }
+}
+
+function renderProfile(d) {
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('authed').classList.remove('hidden');
+  const name = d.packer.full_name || d.packer.email;
+  document.getElementById('hello').textContent = 'Welcome, ' + name;
+  document.getElementById('meta').textContent = d.packer.email +
+    (d.packer.business_name ? ' \u00b7 ' + d.packer.business_name : '');
+
+  const links = d.links || [];
+  const empty = document.getElementById('links-empty');
+  const list = document.getElementById('links');
+  if (links.length === 0) {
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  list.innerHTML = links.map((l) => {
+    const status = (l.status || 'active').replace(/_/g, ' ');
+    const statusCls = l.status === 'active'
+      ? 'bg-green-50 text-green-700'
+      : l.status === 'paused'
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-gray-100 text-gray-500';
+    return (
+      '<div class="border border-gray-100 rounded-xl p-3 flex items-center justify-between gap-2">' +
+        '<div class="min-w-0">' +
+          '<div class="font-semibold text-sm truncate">' + escapeHtml(l.tenant_email || '(unknown)') + '</div>' +
+          '<div class="text-[11px] text-gray-500">linked ' + new Date(l.linked_at).toLocaleDateString() +
+            ' \u00b7 weight ' + l.load_weight +
+            (l.orders_assigned_count ? ' \u00b7 ' + l.orders_assigned_count + ' assigned' : '') +
+          '</div>' +
+        '</div>' +
+        '<span class="text-[10px] px-2 py-0.5 rounded-full font-medium ' + statusCls + ' uppercase">' + escapeHtml(status) + '</span>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function logout() {
+  localStorage.removeItem('packerToken');
+  window.location.href = '/packer-login';
+}
+
+function escapeHtml(s) {
+  return (s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+load();
+</script>
+</body>
+</html>
