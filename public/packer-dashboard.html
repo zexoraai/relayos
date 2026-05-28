@@ -8,11 +8,18 @@
 <style>
   body { background: linear-gradient(135deg, #fefdfb 0%, #fdf8f0 50%, #faf3e8 100%); min-height: 100vh; }
   .card { background: #fff; border-radius: 24px; box-shadow: 0 12px 40px rgba(0,0,0,.08); }
+  .field-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; margin-bottom: 4px; display: block; }
+  .field-input { width: 100%; padding: 10px 12px; background: #f3f4f6; border-radius: 12px; font-size: 14px; border: 0; }
+  .field-input:focus { outline: none; box-shadow: 0 0 0 2px #fbbf24; }
+  .tab-button { padding: 8px 16px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
+  .tab-button.active { background: #fbbf24; color: #111827; }
+  .tab-button:not(.active) { background: #f3f4f6; color: #6b7280; }
+  .tab-button:not(.active):hover { background: #e5e7eb; }
 </style>
 </head>
 <body class="text-gray-900 antialiased">
-<div class="min-h-screen flex items-center justify-center p-4">
-  <div class="card w-full max-w-2xl p-8">
+<div class="min-h-screen flex items-start justify-center p-4 py-8">
+  <div class="card w-full max-w-3xl p-8">
 
     <!-- Initial loading state -->
     <div id="loading" class="text-center py-8">
@@ -39,18 +46,145 @@
         <button onclick="logout()" class="text-xs text-gray-400 hover:text-gray-700 underline">Log out</button>
       </div>
 
-      <!-- Pending invites (only shown when invites exist for this email) -->
-      <div id="invites-section" class="hidden mb-6">
-        <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
-        <div id="invites" class="space-y-2"></div>
+      <!-- Tab nav -->
+      <div class="flex gap-2 mb-6">
+        <button class="tab-button active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+        <button class="tab-button" data-tab="profile" onclick="switchTab('profile')">Profile</button>
       </div>
 
-      <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
-      <div id="links-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
-        You have not been linked to a tenant yet. A tenant must invite you;
-        when they do, the invite shows up here for you to accept.
+      <!-- Overview tab -->
+      <div id="tab-overview">
+        <!-- Pending invites (only shown when invites exist for this email) -->
+        <div id="invites-section" class="hidden mb-6">
+          <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
+          <div id="invites" class="space-y-2"></div>
+        </div>
+
+        <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
+        <div id="links-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
+          You have not been linked to a tenant yet. A tenant must invite you;
+          when they do, the invite shows up here for you to accept.
+        </div>
+        <div id="links" class="space-y-2"></div>
+
+        <div id="profile-warning" class="hidden mt-6 bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-700">
+          Your collection profile is incomplete. Tenants assign orders based
+          on your collection address, so finish setting it on the
+          <button onclick="switchTab('profile')" class="underline font-semibold">Profile tab</button>
+          to start receiving orders.
+        </div>
       </div>
-      <div id="links" class="space-y-2"></div>
+
+      <!-- Profile tab -->
+      <div id="tab-profile" class="hidden">
+        <p class="text-sm text-gray-500 mb-5">
+          Your contact details and the address tenants should use when
+          dispatching orders to you. Phase 4 (order assignment) uses the
+          collection address as the courier pickup point on every order
+          assigned to you.
+        </p>
+
+        <form id="profile-form" class="space-y-6">
+          <section>
+            <h3 class="font-semibold text-sm mb-3">Identity</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="field-label">Full name</label>
+                <input id="pf-full_name" class="field-input" autocomplete="name">
+              </div>
+              <div>
+                <label class="field-label">Phone</label>
+                <input id="pf-phone" class="field-input" autocomplete="tel" placeholder="+27...">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="field-label">Business name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
+                <input id="pf-business_name" class="field-input">
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 class="font-semibold text-sm mb-1">Collection point — locker</h3>
+            <p class="text-xs text-gray-500 mb-3">
+              For locker-to-locker orders. Leave blank if you don't drop at a locker.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="field-label">Locker terminal ID</label>
+                <input id="pf-collection_terminal_id" class="field-input" placeholder="e.g. PUDO-123">
+              </div>
+              <div>
+                <label class="field-label">Locker name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
+                <input id="pf-collection_locker_name" class="field-input">
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 class="font-semibold text-sm mb-1">Collection point — door address</h3>
+            <p class="text-xs text-gray-500 mb-3">
+              For door-collection orders. Used as the courier pickup
+              address when a tenant assigns a non-locker order to you.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="sm:col-span-2">
+                <label class="field-label">Street</label>
+                <input id="pf-addr-street" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">Suburb</label>
+                <input id="pf-addr-suburb" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">City</label>
+                <input id="pf-addr-city" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">Province</label>
+                <input id="pf-addr-province" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">Postal code</label>
+                <input id="pf-addr-postal_code" class="field-input">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="field-label">Country</label>
+                <input id="pf-addr-country" class="field-input" placeholder="South Africa">
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 class="font-semibold text-sm mb-1">Collection contact</h3>
+            <p class="text-xs text-gray-500 mb-3">
+              The person the courier should contact at the collection
+              point. Defaults to your identity above when blank.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="field-label">Contact name</label>
+                <input id="pf-collection_contact_name" class="field-input">
+              </div>
+              <div>
+                <label class="field-label">Contact phone</label>
+                <input id="pf-collection_contact_phone" class="field-input">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="field-label">Contact email</label>
+                <input id="pf-collection_contact_email" type="email" class="field-input">
+              </div>
+            </div>
+          </section>
+
+          <div class="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
+            <span id="profile-feedback" class="hidden text-xs"></span>
+            <button type="submit" id="profile-save"
+                    class="px-6 py-2.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-sm transition-all">
+              Save profile
+            </button>
+          </div>
+        </form>
+      </div>
 
       <div id="action-feedback" class="hidden mt-4 text-sm rounded-xl p-3"></div>
     </div>
@@ -60,6 +194,7 @@
 
 <script>
 let _packerEmail = null;
+let _activeTab = 'overview';
 
 async function load() {
   const token = localStorage.getItem('packerToken');
@@ -82,15 +217,12 @@ async function load() {
     }
     renderProfile(data.data);
 
-    // If the URL came in with ?token=... (clicked an invite link while
-    // already logged in), auto-accept it now.
+    // Auto-accept invite token if dashboard URL came in with ?token=...
     const params = new URLSearchParams(window.location.search);
     const inviteFromUrl = params.get('token');
     if (inviteFromUrl) {
-      // Strip the token from the URL so a refresh doesn't re-trigger.
       history.replaceState({}, '', window.location.pathname);
       await acceptInvite(inviteFromUrl);
-      // Reload the profile to pick up the new link
       await load();
     }
   } catch (e) {
@@ -110,6 +242,22 @@ function renderProfile(d) {
 
   renderInvites(d.pending_invites || []);
   renderLinks(d.links || []);
+  populateProfileForm(d.packer);
+  renderProfileWarning(d.packer);
+}
+
+function renderProfileWarning(p) {
+  const warn = document.getElementById('profile-warning');
+  const incomplete =
+    !p.full_name ||
+    !p.phone ||
+    (
+      !p.collection_terminal_id &&
+      !(p.collection_door_address &&
+        (p.collection_door_address.street || p.collection_door_address.city))
+    );
+  if (incomplete) warn.classList.remove('hidden');
+  else warn.classList.add('hidden');
 }
 
 function renderInvites(invites) {
@@ -170,6 +318,114 @@ function renderLinks(links) {
       '</div>'
     );
   }).join('');
+}
+
+function populateProfileForm(p) {
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.value = v == null ? '' : v;
+  };
+  set('pf-full_name', p.full_name);
+  set('pf-business_name', p.business_name);
+  set('pf-phone', p.phone);
+  set('pf-collection_terminal_id', p.collection_terminal_id);
+  set('pf-collection_locker_name', p.collection_locker_name);
+  const a = p.collection_door_address || {};
+  set('pf-addr-street', a.street);
+  set('pf-addr-suburb', a.suburb);
+  set('pf-addr-city', a.city);
+  set('pf-addr-province', a.province);
+  set('pf-addr-postal_code', a.postal_code);
+  set('pf-addr-country', a.country);
+  set('pf-collection_contact_name', p.collection_contact_name);
+  set('pf-collection_contact_phone', p.collection_contact_phone);
+  set('pf-collection_contact_email', p.collection_contact_email);
+}
+
+function readProfileForm() {
+  const get = (id) => {
+    const v = (document.getElementById(id).value || '').trim();
+    return v.length ? v : null;
+  };
+  // Door address: pack into one object only if at least one field is set,
+  // otherwise send null so the column is cleared.
+  const addr = {
+    street: get('pf-addr-street'),
+    suburb: get('pf-addr-suburb'),
+    city: get('pf-addr-city'),
+    province: get('pf-addr-province'),
+    postal_code: get('pf-addr-postal_code'),
+    country: get('pf-addr-country'),
+  };
+  const anyAddr = Object.values(addr).some((v) => v != null);
+  return {
+    full_name: get('pf-full_name'),
+    business_name: get('pf-business_name'),
+    phone: get('pf-phone'),
+    collection_terminal_id: get('pf-collection_terminal_id'),
+    collection_locker_name: get('pf-collection_locker_name'),
+    collection_door_address: anyAddr ? addr : null,
+    collection_contact_name: get('pf-collection_contact_name'),
+    collection_contact_phone: get('pf-collection_contact_phone'),
+    collection_contact_email: get('pf-collection_contact_email'),
+  };
+}
+
+document.addEventListener('submit', async (ev) => {
+  if (ev.target && ev.target.id === 'profile-form') {
+    ev.preventDefault();
+    await saveProfile();
+  }
+});
+
+async function saveProfile() {
+  const token = localStorage.getItem('packerToken');
+  if (!token) return;
+  const btn = document.getElementById('profile-save');
+  const fb = document.getElementById('profile-feedback');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  fb.classList.add('hidden');
+  try {
+    const res = await fetch('/packer-auth/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify(readProfileForm()),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      fb.textContent = data?.error?.message || 'Save failed';
+      fb.className = 'text-xs text-red-600';
+      fb.classList.remove('hidden');
+      return;
+    }
+    fb.textContent = 'Saved.';
+    fb.className = 'text-xs text-green-700';
+    fb.classList.remove('hidden');
+    // Repopulate from canonical server state (covers null/empty coercion)
+    populateProfileForm(data.data.packer);
+    renderProfileWarning(data.data.packer);
+    // Update header in case full_name changed
+    const name = data.data.packer.full_name || data.data.packer.email;
+    document.getElementById('hello').textContent = 'Welcome, ' + name;
+    setTimeout(() => fb.classList.add('hidden'), 3000);
+  } catch (e) {
+    fb.textContent = e.message || 'Network error';
+    fb.className = 'text-xs text-red-600';
+    fb.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save profile';
+  }
+}
+
+function switchTab(tab) {
+  _activeTab = tab;
+  document.querySelectorAll('.tab-button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.getElementById('tab-overview').classList.toggle('hidden', tab !== 'overview');
+  document.getElementById('tab-profile').classList.toggle('hidden', tab !== 'profile');
 }
 
 async function acceptInvite(token) {

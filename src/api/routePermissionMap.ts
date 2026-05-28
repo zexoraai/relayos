@@ -140,6 +140,13 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   },
   {
     router: 'packerAuthRoutes',
+    method: 'PUT',
+    path: '/packer-auth/profile',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer can edit their own profile, not a tenant-permission concern',
+  },
+  {
+    router: 'packerAuthRoutes',
     method: 'POST',
     path: '/packer-auth/logout',
     permission: 'auth-only',

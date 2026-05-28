@@ -284,6 +284,67 @@ router.get('/me', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, 
 });
 
 // ---------------------------------------------------------------------------
+// PUT /packer-auth/profile
+// ---------------------------------------------------------------------------
+
+/**
+ * Let an authenticated packer edit their own profile. Body fields:
+ *   { full_name?, business_name?, phone?,
+ *     collection_terminal_id?, collection_locker_name?,
+ *     collection_door_address?, collection_contact_name?,
+ *     collection_contact_phone?, collection_contact_email? }
+ *
+ * Field-level allowlist — anything not in this set is silently
+ * dropped. We deliberately don't expose `email`, `status`, or any
+ * `*_at` timestamps; those are admin-only.
+ */
+const ALLOWED_PROFILE_FIELDS = [
+  'full_name', 'business_name', 'phone',
+  'collection_terminal_id', 'collection_locker_name',
+  'collection_door_address',
+  'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
+];
+
+router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const update: Record<string, any> = { updated_at: new Date() };
+  for (const k of ALLOWED_PROFILE_FIELDS) {
+    if (req.body && k in req.body) {
+      update[k] = req.body[k] === '' ? null : req.body[k];
+    }
+  }
+
+  // Light validation: the door address must be either null/undefined or
+  // an object. Reject arrays / strings to prevent accidental shape drift.
+  if (update.collection_door_address !== undefined && update.collection_door_address !== null) {
+    const v = update.collection_door_address;
+    if (typeof v !== 'object' || Array.isArray(v)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_ADDRESS', message: 'collection_door_address must be an object or null' },
+      });
+    }
+  }
+
+  const updated = await db('packers')
+    .where({ id: packerId })
+    .update(update)
+    .returning([
+      'id', 'email', 'full_name', 'business_name', 'phone',
+      'collection_terminal_id', 'collection_locker_name', 'collection_door_address',
+      'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
+      'status',
+    ]);
+
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Packer not found' } });
+  }
+  log.info({ packerId, fields: Object.keys(update).filter((k) => k !== 'updated_at') }, 'Packer profile updated');
+  return res.status(200).json({ success: true, data: { packer: updated[0] } });
+});
+
+// ---------------------------------------------------------------------------
 // POST /packer-auth/logout
 // ---------------------------------------------------------------------------
 

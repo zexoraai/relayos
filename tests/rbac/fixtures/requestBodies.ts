@@ -148,4 +148,7 @@ export const REQUEST_BODIES: Record<string, unknown> = {
   'POST /packers/invites/:id/revoke': {},
   'PUT /packers/links/:id': { load_weight: 2 },
   'POST /packers/links/:id/unlink': { reason: 'verification' },
+
+  // packerAuthRoutes.ts (auth-only — packer's own identity & profile)
+  'PUT /packer-auth/profile': { full_name: 'Test Packer', phone: '+27000000000' },
 };
