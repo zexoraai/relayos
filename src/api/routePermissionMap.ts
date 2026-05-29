@@ -162,6 +162,20 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   {
     router: 'packerAuthRoutes',
     method: 'POST',
+    path: '/packer-auth/orders/:id/mark-packed',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer marks their own assigned orders as packed',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/orders/:id/mark-dropped-off',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer marks their own assigned orders as handed to courier',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
     path: '/packer-auth/logout',
     permission: 'auth-only',
     justification: 'stateless logout — any holder of a packer JWT may invoke',

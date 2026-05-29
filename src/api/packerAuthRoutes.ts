@@ -462,6 +462,74 @@ router.post('/orders/:id/reject', packerAuthMiddleware, async (req: PackerAuthen
 });
 
 // ---------------------------------------------------------------------------
+// POST /packer-auth/orders/:id/mark-packed
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer marks one of their assigned orders as packed. Body:
+ *   { note? }   (max 500 chars)
+ *
+ * Mirrors POST /packer/orders/:id/mark-packed (tenant side) but
+ * scoped to assigned_packer_id = me, so independent packers can
+ * complete their own queue without a tenant login.
+ */
+router.post('/orders/:id/mark-packed', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const id = req.params.id as string;
+  const note = (req.body?.note || '').toString().slice(0, 500);
+
+  const updated = await db('orders')
+    .where({ id, assigned_packer_id: packerId })
+    .update({
+      packing_status: 'packed',
+      packed_at: new Date(),
+      packing_note: note || null,
+      updated_at: new Date(),
+    })
+    .returning(['id', 'order_number', 'packing_status']);
+
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not assigned to you' } });
+  }
+  log.info({ packerId, orderId: id }, 'Packer marked order packed');
+  return res.status(200).json({ success: true, data: updated[0] });
+});
+
+// ---------------------------------------------------------------------------
+// POST /packer-auth/orders/:id/mark-dropped-off
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer marks one of their assigned orders as handed to the courier.
+ * If the order wasn't yet marked packed, also stamps packed_at to
+ * preserve the invariant that dropped_off implies packed.
+ */
+router.post('/orders/:id/mark-dropped-off', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const id = req.params.id as string;
+  const note = (req.body?.note || '').toString().slice(0, 500);
+
+  const updated = await db('orders')
+    .where({ id, assigned_packer_id: packerId })
+    .update({
+      packing_status: 'dropped_off',
+      dropped_off_at: new Date(),
+      packing_note: note || null,
+      packed_at: db.raw('COALESCE(packed_at, NOW())'),
+      updated_at: new Date(),
+    })
+    .returning(['id', 'order_number', 'packing_status']);
+
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not assigned to you' } });
+  }
+  log.info({ packerId, orderId: id }, 'Packer marked order dropped off');
+  return res.status(200).json({ success: true, data: updated[0] });
+});
+
+// ---------------------------------------------------------------------------
 // POST /packer-auth/logout
 // ---------------------------------------------------------------------------
 

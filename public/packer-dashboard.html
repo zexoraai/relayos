@@ -536,14 +536,30 @@ function renderOrderCard(o) {
     } catch { return ''; }
   })();
 
-  // Reject button only for open orders. We don't expose pack/drop-off
-  // here — those run on the tenant-side packing tab today.
-  const actions = !isPacked
-    ? '<div class="flex gap-2 flex-shrink-0">' +
-        '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-        'class="px-3 py-1.5 bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs">Reject</button>' +
-      '</div>'
-    : '';
+  // Action buttons. Reject + mark packed available on open orders;
+  // mark dropped-off available once packed (so the packer can split
+  // the workflow over two button presses if they pack everything
+  // first and walk to the locker / hand over later).
+  let actions = '';
+  if (!isPacked) {
+    if (o.packing_status === 'packed') {
+      actions =
+        '<div class="flex flex-col gap-2 flex-shrink-0">' +
+          '<button onclick="markMyOrderDroppedOff(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
+          'class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-full text-xs">Mark dropped off</button>' +
+          '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
+          'class="px-3 py-1.5 bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs">Reject</button>' +
+        '</div>';
+    } else {
+      actions =
+        '<div class="flex flex-col gap-2 flex-shrink-0">' +
+          '<button onclick="markMyOrderPacked(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
+          'class="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-xs">Mark packed</button>' +
+          '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
+          'class="px-3 py-1.5 bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs">Reject</button>' +
+        '</div>';
+    }
+  }
 
   return (
     '<div class="border border-gray-100 rounded-xl p-4 flex items-start justify-between gap-3">' +
@@ -581,6 +597,36 @@ async function rejectMyOrder(orderId, orderNumber) {
     } else {
       showFeedback('Rejected. Reassigned to another packer.', 'success');
     }
+    loadMyOrders();
+  } catch (e) {
+    showFeedback(e.message || 'Network error', 'error');
+  }
+}
+
+async function markMyOrderPacked(orderId, orderNumber) {
+  if (!confirm('Mark order ' + orderNumber + ' as packed?')) return;
+  await packerOrderAction(orderId, '/mark-packed', 'Marked as packed.');
+}
+
+async function markMyOrderDroppedOff(orderId, orderNumber) {
+  if (!confirm('Mark order ' + orderNumber + ' as handed to courier?')) return;
+  await packerOrderAction(orderId, '/mark-dropped-off', 'Marked as dropped off.');
+}
+
+async function packerOrderAction(orderId, suffix, successMsg) {
+  const token = localStorage.getItem('packerToken');
+  try {
+    const res = await fetch('/packer-auth/orders/' + encodeURIComponent(orderId) + suffix, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: '{}',
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showFeedback(data?.error?.message || 'Action failed', 'error');
+      return;
+    }
+    showFeedback(successMsg, 'success');
     loadMyOrders();
   } catch (e) {
     showFeedback(e.message || 'Network error', 'error');

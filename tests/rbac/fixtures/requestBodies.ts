@@ -153,4 +153,6 @@ export const REQUEST_BODIES: Record<string, unknown> = {
   // packerAuthRoutes.ts (auth-only — packer's own identity & profile)
   'PUT /packer-auth/profile': { full_name: 'Test Packer', phone: '+27000000000' },
   'POST /packer-auth/orders/:id/reject': { reason: 'verification' },
+  'POST /packer-auth/orders/:id/mark-packed': { note: 'verification' },
+  'POST /packer-auth/orders/:id/mark-dropped-off': { note: 'verification' },
 };
