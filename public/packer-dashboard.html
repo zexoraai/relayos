@@ -5,232 +5,356 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>RelayOS Packer</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'] },
+        colors: {
+          brand: { 50: '#fefce8', 100: '#fef9c3', 200: '#fef08a', 300: '#fde047', 400: '#facc15', 500: '#eab308', 600: '#ca8a04', 700: '#a16207' },
+          surface: { 50: '#fefdfb', 100: '#fdf8f0', 200: '#faf3e8', 300: '#f5ede0' },
+          dark: { 800: '#1c1c1e', 900: '#141416' }
+        },
+        borderRadius: { '2xl': '1rem', '3xl': '1.25rem', '4xl': '1.5rem' },
+        boxShadow: {
+          'card': '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)',
+          'card-hover': '0 10px 40px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
+          'elevated': '0 20px 60px rgba(0,0,0,0.1), 0 4px 16px rgba(0,0,0,0.05)',
+        }
+      }
+    }
+  }
+</script>
 <style>
-  body { background: linear-gradient(135deg, #fefdfb 0%, #fdf8f0 50%, #faf3e8 100%); min-height: 100vh; }
-  .card { background: #fff; border-radius: 24px; box-shadow: 0 12px 40px rgba(0,0,0,.08); }
+  * { -webkit-font-smoothing: antialiased; }
+  body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; background: linear-gradient(135deg, #fefdfb 0%, #fdf8f0 50%, #faf3e8 100%); min-height: 100vh; }
+  .sidebar-item.active > span { background: rgba(250,204,21,0.12); border-left: 3px solid #facc15; color: #facc15; padding-left: calc(0.75rem - 3px); }
   .field-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; margin-bottom: 4px; display: block; }
-  .field-input { width: 100%; padding: 10px 12px; background: #f3f4f6; border-radius: 12px; font-size: 14px; border: 0; }
-  .field-input:focus { outline: none; box-shadow: 0 0 0 2px #fbbf24; }
-  .tab-button { padding: 8px 16px; border-radius: 9999px; font-size: 13px; font-weight: 600; }
-  .tab-button.active { background: #fbbf24; color: #111827; }
-  .tab-button:not(.active) { background: #f3f4f6; color: #6b7280; }
-  .tab-button:not(.active):hover { background: #e5e7eb; }
-  .orders-filter { padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 600; background: #f3f4f6; color: #6b7280; }
+  .field-input { width: 100%; padding: 10px 12px; background: #fdf8f0; border-radius: 12px; font-size: 14px; border: 0; }
+  .field-input:focus { outline: none; box-shadow: 0 0 0 2px #facc15; }
+  .orders-filter { padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 600; background: #fdf8f0; color: #6b7280; transition: all 0.2s; }
   .orders-filter.active { background: #111827; color: #fff; }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-fadeUp { animation: fadeUp 0.3s ease-out; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #d1d5db; }
+
+  /* Mobile drawer behaviour mirrors the main dashboard. */
+  #sidebar-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px);
+    opacity: 0; pointer-events: none; transition: opacity 0.25s; z-index: 40;
+  }
+  #sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
+  @media (max-width: 767px) {
+    #sidebar {
+      width: 280px !important;
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+    }
+    #sidebar.drawer-open { transform: translateX(0); box-shadow: 0 25px 80px rgba(0,0,0,0.4); }
+    #main-content {
+      margin-left: 0 !important;
+      padding: 1rem !important;
+      padding-top: calc(60px + env(safe-area-inset-top, 0px) + 0.75rem) !important;
+    }
+    #mobile-topbar {
+      display: flex !important;
+      height: 60px;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+      padding-bottom: 0.5rem;
+      box-sizing: content-box;
+    }
+    #app-layout > main > .max-w-5xl > .flex.items-center.justify-between.mb-8 { display: none; }
+  }
 </style>
 </head>
 <body class="text-gray-900 antialiased">
-<div class="min-h-screen flex items-start justify-center p-4 py-8">
-  <div class="card w-full max-w-3xl p-8">
 
-    <!-- Initial loading state -->
-    <div id="loading" class="text-center py-8">
-      <div class="text-sm text-gray-400">Loading your packer profile...</div>
+<!-- Loading state -->
+<div id="loading" class="min-h-screen flex items-center justify-center">
+  <div class="text-sm text-gray-400">Loading your packer profile...</div>
+</div>
+
+<!-- Not authenticated -->
+<div id="not-authed" class="hidden min-h-screen flex items-center justify-center p-4">
+  <div class="bg-white rounded-3xl shadow-elevated w-full max-w-md p-8 text-center">
+    <h1 class="text-2xl font-bold mb-2">You are not signed in</h1>
+    <p class="text-sm text-gray-500 mb-5">Sign in to your packer account to see your linked tenants and orders.</p>
+    <div class="flex justify-center gap-2">
+      <a href="/packer-login" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Log in</a>
+      <a href="/packer-signup" class="px-5 py-2.5 bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold rounded-full text-sm transition-all">Sign up</a>
     </div>
-
-    <!-- Not authenticated -->
-    <div id="not-authed" class="hidden text-center py-8">
-      <h1 class="text-2xl font-bold mb-2">You are not signed in</h1>
-      <p class="text-sm text-gray-500 mb-5">Sign in to your packer account to see your linked tenants and orders.</p>
-      <div class="flex justify-center gap-2">
-        <a href="/packer-login" class="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-sm">Log in</a>
-        <a href="/packer-signup" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Sign up</a>
-      </div>
-    </div>
-
-    <!-- Authenticated content -->
-    <div id="authed" class="hidden">
-      <div class="flex items-center justify-between mb-6">
-        <div>
-          <h1 class="text-2xl font-bold mb-1" id="hello">Welcome</h1>
-          <p class="text-sm text-gray-500" id="meta"></p>
-        </div>
-        <button onclick="logout()" class="text-xs text-gray-400 hover:text-gray-700 underline">Log out</button>
-      </div>
-
-      <!-- Tab nav -->
-      <div class="flex gap-2 mb-6">
-        <button class="tab-button active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-        <button class="tab-button" data-tab="orders" onclick="switchTab('orders')">My orders</button>
-        <button class="tab-button" data-tab="profile" onclick="switchTab('profile')">Profile</button>
-      </div>
-
-      <!-- Overview tab -->
-      <div id="tab-overview">
-        <!-- Pending invites (only shown when invites exist for this email) -->
-        <div id="invites-section" class="hidden mb-6">
-          <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
-          <div id="invites" class="space-y-2"></div>
-        </div>
-
-        <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
-        <div id="links-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
-          You have not been linked to a tenant yet. A tenant must invite you;
-          when they do, the invite shows up here for you to accept.
-        </div>
-        <div id="links" class="space-y-2"></div>
-
-        <div id="profile-warning" class="hidden mt-6 bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-700">
-          Your collection profile is incomplete. Tenants assign orders based
-          on your collection address, so finish setting it on the
-          <button onclick="switchTab('profile')" class="underline font-semibold">Profile tab</button>
-          to start receiving orders.
-        </div>
-      </div>
-
-      <!-- Orders tab -->
-      <div id="tab-orders" class="hidden">
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-          <div class="bg-amber-50 rounded-2xl p-4">
-            <div class="text-[11px] uppercase tracking-wide text-amber-700 font-semibold">Open</div>
-            <div class="text-2xl font-bold text-amber-700 mt-0.5" id="counter-open">0</div>
-          </div>
-          <div class="bg-green-50 rounded-2xl p-4">
-            <div class="text-[11px] uppercase tracking-wide text-green-700 font-semibold">Today</div>
-            <div class="text-2xl font-bold text-green-700 mt-0.5" id="counter-today">0</div>
-          </div>
-          <div class="bg-gray-50 rounded-2xl p-4">
-            <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">This week</div>
-            <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-week">0</div>
-          </div>
-          <div class="bg-gray-50 rounded-2xl p-4">
-            <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">All time</div>
-            <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-all">0</div>
-          </div>
-        </div>
-
-        <div class="flex gap-2 mb-4">
-          <button class="orders-filter active" data-filter="open" onclick="setOrdersFilter('open')">Open</button>
-          <button class="orders-filter" data-filter="packed" onclick="setOrdersFilter('packed')">Packed</button>
-          <button class="orders-filter" data-filter="all" onclick="setOrdersFilter('all')">All</button>
-        </div>
-
-        <div id="orders-list" class="space-y-2"></div>
-        <div id="orders-empty" class="hidden text-sm text-gray-500 bg-gray-50 rounded-2xl p-4">
-          Nothing here yet.
-        </div>
-      </div>
-
-      <!-- Profile tab -->
-      <div id="tab-profile" class="hidden">
-        <p class="text-sm text-gray-500 mb-5">
-          Your contact details and the address tenants should use when
-          dispatching orders to you. Phase 4 (order assignment) uses the
-          collection address as the courier pickup point on every order
-          assigned to you.
-        </p>
-
-        <form id="profile-form" class="space-y-6">
-          <section>
-            <h3 class="font-semibold text-sm mb-3">Identity</h3>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="field-label">Full name</label>
-                <input id="pf-full_name" class="field-input" autocomplete="name">
-              </div>
-              <div>
-                <label class="field-label">Phone</label>
-                <input id="pf-phone" class="field-input" autocomplete="tel" placeholder="+27...">
-              </div>
-              <div class="sm:col-span-2">
-                <label class="field-label">Business name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
-                <input id="pf-business_name" class="field-input">
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h3 class="font-semibold text-sm mb-1">Collection point — locker</h3>
-            <p class="text-xs text-gray-500 mb-3">
-              For locker-to-locker orders. Leave blank if you don't drop at a locker.
-            </p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="field-label">Locker terminal ID</label>
-                <input id="pf-collection_terminal_id" class="field-input" placeholder="e.g. PUDO-123">
-              </div>
-              <div>
-                <label class="field-label">Locker name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
-                <input id="pf-collection_locker_name" class="field-input">
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h3 class="font-semibold text-sm mb-1">Collection point — door address</h3>
-            <p class="text-xs text-gray-500 mb-3">
-              For door-collection orders. Used as the courier pickup
-              address when a tenant assigns a non-locker order to you.
-            </p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div class="sm:col-span-2">
-                <label class="field-label">Street</label>
-                <input id="pf-addr-street" class="field-input">
-              </div>
-              <div>
-                <label class="field-label">Suburb</label>
-                <input id="pf-addr-suburb" class="field-input">
-              </div>
-              <div>
-                <label class="field-label">City</label>
-                <input id="pf-addr-city" class="field-input">
-              </div>
-              <div>
-                <label class="field-label">Province</label>
-                <input id="pf-addr-province" class="field-input">
-              </div>
-              <div>
-                <label class="field-label">Postal code</label>
-                <input id="pf-addr-postal_code" class="field-input">
-              </div>
-              <div class="sm:col-span-2">
-                <label class="field-label">Country</label>
-                <input id="pf-addr-country" class="field-input" placeholder="South Africa">
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h3 class="font-semibold text-sm mb-1">Collection contact</h3>
-            <p class="text-xs text-gray-500 mb-3">
-              The person the courier should contact at the collection
-              point. Defaults to your identity above when blank.
-            </p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label class="field-label">Contact name</label>
-                <input id="pf-collection_contact_name" class="field-input">
-              </div>
-              <div>
-                <label class="field-label">Contact phone</label>
-                <input id="pf-collection_contact_phone" class="field-input">
-              </div>
-              <div class="sm:col-span-2">
-                <label class="field-label">Contact email</label>
-                <input id="pf-collection_contact_email" type="email" class="field-input">
-              </div>
-            </div>
-          </section>
-
-          <div class="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
-            <span id="profile-feedback" class="hidden text-xs"></span>
-            <button type="submit" id="profile-save"
-                    class="px-6 py-2.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-sm transition-all">
-              Save profile
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div id="action-feedback" class="hidden mt-4 text-sm rounded-xl p-3"></div>
-    </div>
-
   </div>
+</div>
+
+<!-- Authenticated dashboard shell -->
+<div id="app-layout" class="hidden flex min-h-screen">
+
+  <!-- Mobile topbar (hidden on md+) -->
+  <header id="mobile-topbar" class="md:hidden fixed top-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-b border-gray-100 px-4 py-3 items-center justify-between">
+    <button onclick="openDrawer()" aria-label="Open menu" class="w-10 h-10 rounded-xl bg-surface-100 flex items-center justify-center text-gray-700 active:scale-95 transition-transform">
+      <i data-lucide="menu" class="w-5 h-5"></i>
+    </button>
+    <div class="flex-1 text-center px-2">
+      <h2 id="mobile-page-title" class="text-base font-bold tracking-tight truncate">Overview</h2>
+    </div>
+    <div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm" id="mobile-user-avatar">P</div>
+  </header>
+
+  <!-- Sidebar backdrop (mobile drawer overlay) -->
+  <div id="sidebar-backdrop" onclick="closeDrawer()"></div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="bg-dark-900 text-white flex flex-col fixed inset-y-0 left-0 z-50 w-[240px] transition-all duration-300">
+    <div class="px-4 py-5">
+      <h1 class="text-xl font-extrabold text-brand-400 tracking-tight">RelayOS</h1>
+      <p class="text-[10px] uppercase tracking-widest text-gray-500 font-semibold mt-1">Packer workspace</p>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto px-2">
+      <div class="mb-1">
+        <div class="px-3 py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Workspace</div>
+        <ul class="space-y-0.5">
+          <li class="sidebar-item active" data-tab="overview" onclick="switchTab('overview')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5">
+              <i data-lucide="layout-dashboard" class="w-4 h-4 flex-shrink-0"></i>
+              <span>Overview</span>
+            </span>
+          </li>
+          <li class="sidebar-item" data-tab="orders" onclick="switchTab('orders')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
+              <i data-lucide="clipboard-list" class="w-4 h-4 flex-shrink-0"></i>
+              <span>My orders</span>
+            </span>
+          </li>
+          <li class="sidebar-item" data-tab="profile" onclick="switchTab('profile')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
+              <i data-lucide="user" class="w-4 h-4 flex-shrink-0"></i>
+              <span>Profile</span>
+            </span>
+          </li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="px-3 py-4 border-t border-white/5">
+      <button onclick="logout()" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs text-gray-400 hover:text-white hover:bg-white/5 transition-all">
+        <i data-lucide="log-out" class="w-4 h-4 flex-shrink-0"></i>
+        <span>Sign out</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main id="main-content" class="flex-1 ml-[240px] p-8 overflow-y-auto transition-all duration-300">
+    <div class="max-w-5xl mx-auto">
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h1 id="page-title" class="text-2xl font-bold tracking-tight">Overview</h1>
+          <p id="page-subtitle" class="text-sm text-gray-500 mt-0.5">Welcome back</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm" id="user-avatar">P</div>
+        </div>
+      </div>
+
+      <div id="tab-content" class="animate-fadeUp">
+
+        <!-- Overview tab -->
+        <div id="tab-overview">
+          <!-- Pending invites -->
+          <div id="invites-section" class="hidden mb-6 bg-white rounded-3xl shadow-card p-6">
+            <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
+            <div id="invites" class="space-y-2"></div>
+          </div>
+
+          <div class="bg-white rounded-3xl shadow-card p-6">
+            <h2 class="font-semibold text-base mb-3">Linked tenants</h2>
+            <div id="links-empty" class="hidden text-sm text-gray-500 bg-surface-100 rounded-2xl p-4">
+              You have not been linked to a tenant yet. A tenant must invite you;
+              when they do, the invite shows up here for you to accept.
+            </div>
+            <div id="links" class="space-y-2"></div>
+          </div>
+
+          <div id="profile-warning" class="hidden mt-6 bg-brand-50 border border-brand-200 rounded-2xl p-4 text-sm text-brand-700">
+            Your collection profile is incomplete. Tenants assign orders based
+            on your collection address, so finish setting it on the
+            <button onclick="switchTab('profile')" class="underline font-semibold">Profile tab</button>
+            to start receiving orders.
+          </div>
+        </div>
+
+        <!-- Orders tab -->
+        <div id="tab-orders" class="hidden">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+            <div class="bg-white rounded-3xl shadow-card p-5">
+              <div class="text-[11px] uppercase tracking-wide text-brand-700 font-semibold">Open</div>
+              <div class="text-2xl font-bold text-brand-700 mt-0.5" id="counter-open">0</div>
+            </div>
+            <div class="bg-white rounded-3xl shadow-card p-5">
+              <div class="text-[11px] uppercase tracking-wide text-green-700 font-semibold">Today</div>
+              <div class="text-2xl font-bold text-green-700 mt-0.5" id="counter-today">0</div>
+            </div>
+            <div class="bg-white rounded-3xl shadow-card p-5">
+              <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">This week</div>
+              <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-week">0</div>
+            </div>
+            <div class="bg-white rounded-3xl shadow-card p-5">
+              <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">All time</div>
+              <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-all">0</div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-3xl shadow-card p-6">
+            <div class="flex gap-2 mb-4">
+              <button class="orders-filter active" data-filter="open" onclick="setOrdersFilter('open')">Open</button>
+              <button class="orders-filter" data-filter="packed" onclick="setOrdersFilter('packed')">Packed</button>
+              <button class="orders-filter" data-filter="all" onclick="setOrdersFilter('all')">All</button>
+            </div>
+
+            <div id="orders-list" class="space-y-2"></div>
+            <div id="orders-empty" class="hidden text-sm text-gray-500 bg-surface-100 rounded-2xl p-4">
+              Nothing here yet.
+            </div>
+          </div>
+        </div>
+
+        <!-- Profile tab -->
+        <div id="tab-profile" class="hidden">
+          <div class="bg-white rounded-3xl shadow-card p-6">
+            <p class="text-sm text-gray-500 mb-5">
+              Your contact details and the address tenants should use when
+              dispatching orders to you. Phase 4 (order assignment) uses the
+              collection address as the courier pickup point on every order
+              assigned to you.
+            </p>
+
+            <form id="profile-form" class="space-y-6">
+              <section>
+                <h3 class="font-semibold text-sm mb-3">Identity</h3>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="field-label">Full name</label>
+                    <input id="pf-full_name" class="field-input" autocomplete="name">
+                  </div>
+                  <div>
+                    <label class="field-label">Phone</label>
+                    <input id="pf-phone" class="field-input" autocomplete="tel" placeholder="+27...">
+                  </div>
+                  <div class="sm:col-span-2">
+                    <label class="field-label">Business name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
+                    <input id="pf-business_name" class="field-input">
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 class="font-semibold text-sm mb-1">Collection point — locker</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                  For locker-to-locker orders. Leave blank if you don't drop at a locker.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="field-label">Locker terminal ID</label>
+                    <input id="pf-collection_terminal_id" class="field-input" placeholder="e.g. PUDO-123">
+                  </div>
+                  <div>
+                    <label class="field-label">Locker name <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
+                    <input id="pf-collection_locker_name" class="field-input">
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 class="font-semibold text-sm mb-1">Collection point — door address</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                  For door-collection orders. Used as the courier pickup
+                  address when a tenant assigns a non-locker order to you.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div class="sm:col-span-2">
+                    <label class="field-label">Street</label>
+                    <input id="pf-addr-street" class="field-input">
+                  </div>
+                  <div>
+                    <label class="field-label">Suburb</label>
+                    <input id="pf-addr-suburb" class="field-input">
+                  </div>
+                  <div>
+                    <label class="field-label">City</label>
+                    <input id="pf-addr-city" class="field-input">
+                  </div>
+                  <div>
+                    <label class="field-label">Province</label>
+                    <input id="pf-addr-province" class="field-input">
+                  </div>
+                  <div>
+                    <label class="field-label">Postal code</label>
+                    <input id="pf-addr-postal_code" class="field-input">
+                  </div>
+                  <div class="sm:col-span-2">
+                    <label class="field-label">Country</label>
+                    <input id="pf-addr-country" class="field-input" placeholder="South Africa">
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 class="font-semibold text-sm mb-1">Collection contact</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                  The person the courier should contact at the collection
+                  point. Defaults to your identity above when blank.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label class="field-label">Contact name</label>
+                    <input id="pf-collection_contact_name" class="field-input">
+                  </div>
+                  <div>
+                    <label class="field-label">Contact phone</label>
+                    <input id="pf-collection_contact_phone" class="field-input">
+                  </div>
+                  <div class="sm:col-span-2">
+                    <label class="field-label">Contact email</label>
+                    <input id="pf-collection_contact_email" type="email" class="field-input">
+                  </div>
+                </div>
+              </section>
+
+              <div class="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
+                <span id="profile-feedback" class="hidden text-xs"></span>
+                <button type="submit" id="profile-save"
+                        class="px-6 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all hover:shadow-lg hover:-translate-y-0.5">
+                  Save profile
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div id="action-feedback" class="hidden mt-4 text-sm rounded-xl p-3"></div>
+      </div>
+    </div>
+  </main>
 </div>
 
 <script>
 let _packerEmail = null;
 let _activeTab = 'overview';
+
+const TAB_TITLES = {
+  overview: { title: 'Overview', subtitle: 'Tenants you pack for' },
+  orders: { title: 'My orders', subtitle: 'Active and recent assignments' },
+  profile: { title: 'Profile', subtitle: 'Identity and collection address' },
+};
 
 async function load() {
   const token = localStorage.getItem('packerToken');
@@ -269,17 +393,25 @@ async function load() {
 
 function renderProfile(d) {
   document.getElementById('loading').classList.add('hidden');
-  document.getElementById('authed').classList.remove('hidden');
+  document.getElementById('app-layout').classList.remove('hidden');
   _packerEmail = d.packer.email;
   const name = d.packer.full_name || d.packer.email;
-  document.getElementById('hello').textContent = 'Welcome, ' + name;
-  document.getElementById('meta').textContent = d.packer.email +
-    (d.packer.business_name ? ' \u00b7 ' + d.packer.business_name : '');
+  document.getElementById('page-subtitle').textContent = name + (d.packer.business_name ? ' \u00b7 ' + d.packer.business_name : '');
+
+  // Avatar initial from name/email
+  const initial = (name || 'P').trim().charAt(0).toUpperCase();
+  const av = document.getElementById('user-avatar');
+  const mav = document.getElementById('mobile-user-avatar');
+  if (av) av.textContent = initial;
+  if (mav) mav.textContent = initial;
 
   renderInvites(d.pending_invites || []);
   renderLinks(d.links || []);
   populateProfileForm(d.packer);
   renderProfileWarning(d.packer);
+
+  // Re-render lucide icons (sidebar + topbar) now that the layout is visible
+  if (window.lucide && lucide.createIcons) lucide.createIcons();
 }
 
 function renderProfileWarning(p) {
@@ -309,7 +441,7 @@ function renderInvites(invites) {
     const expires = new Date(inv.expires_at).toLocaleDateString();
     const safeToken = String(inv.token || '').replace(/'/g, "\\'");
     return (
-      '<div class="border border-amber-200 bg-amber-50 rounded-xl p-4 flex items-center justify-between gap-3">' +
+      '<div class="border border-brand-200 bg-brand-50 rounded-2xl p-4 flex items-center justify-between gap-3">' +
         '<div class="min-w-0">' +
           '<div class="font-semibold text-sm truncate">' + escapeHtml(inv.tenant_email || '(unknown tenant)') + '</div>' +
           '<div class="text-xs text-gray-600 mt-0.5">Wants you on their packer roster' +
@@ -318,7 +450,7 @@ function renderInvites(invites) {
           '<div class="text-[11px] text-gray-500 mt-0.5">Expires ' + expires + ' \u00b7 weight ' + inv.load_weight + '</div>' +
         '</div>' +
         '<div class="flex gap-2 flex-shrink-0">' +
-          '<button onclick="acceptInvite(\'' + safeToken + '\')" class="px-4 py-2 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-xs">Accept</button>' +
+          '<button onclick="acceptInvite(\'' + safeToken + '\')" class="px-4 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Accept</button>' +
         '</div>' +
       '</div>'
     );
@@ -339,13 +471,13 @@ function renderLinks(links) {
     const statusCls = l.status === 'active'
       ? 'bg-green-50 text-green-700'
       : l.status === 'paused'
-        ? 'bg-amber-50 text-amber-700'
-        : 'bg-gray-100 text-gray-500';
+        ? 'bg-brand-50 text-brand-700'
+        : 'bg-surface-100 text-gray-500';
     return (
-      '<div class="border border-gray-100 rounded-xl p-3 flex items-center justify-between gap-2">' +
+      '<div class="border border-gray-100 rounded-2xl p-4 flex items-center justify-between gap-2">' +
         '<div class="min-w-0">' +
           '<div class="font-semibold text-sm truncate">' + escapeHtml(l.tenant_email || '(unknown)') + '</div>' +
-          '<div class="text-[11px] text-gray-500">linked ' + new Date(l.linked_at).toLocaleDateString() +
+          '<div class="text-[11px] text-gray-500 mt-0.5">linked ' + new Date(l.linked_at).toLocaleDateString() +
             ' \u00b7 weight ' + l.load_weight +
             (l.orders_assigned_count ? ' \u00b7 ' + l.orders_assigned_count + ' assigned' : '') +
           '</div>' +
@@ -438,12 +570,16 @@ async function saveProfile() {
     fb.textContent = 'Saved.';
     fb.className = 'text-xs text-green-700';
     fb.classList.remove('hidden');
-    // Repopulate from canonical server state (covers null/empty coercion)
     populateProfileForm(data.data.packer);
     renderProfileWarning(data.data.packer);
-    // Update header in case full_name changed
+    // Update header subtitle / avatar in case full_name changed
     const name = data.data.packer.full_name || data.data.packer.email;
-    document.getElementById('hello').textContent = 'Welcome, ' + name;
+    document.getElementById('page-subtitle').textContent = name + (data.data.packer.business_name ? ' \u00b7 ' + data.data.packer.business_name : '');
+    const initial = (name || 'P').trim().charAt(0).toUpperCase();
+    const av = document.getElementById('user-avatar');
+    const mav = document.getElementById('mobile-user-avatar');
+    if (av) av.textContent = initial;
+    if (mav) mav.textContent = initial;
     setTimeout(() => fb.classList.add('hidden'), 3000);
   } catch (e) {
     fb.textContent = e.message || 'Network error';
@@ -457,13 +593,33 @@ async function saveProfile() {
 
 function switchTab(tab) {
   _activeTab = tab;
-  document.querySelectorAll('.tab-button').forEach((b) => {
-    b.classList.toggle('active', b.dataset.tab === tab);
+  document.querySelectorAll('.sidebar-item').forEach((li) => {
+    li.classList.toggle('active', li.dataset.tab === tab);
+    // Visible color stays muted on inactive items
+    const span = li.querySelector(':scope > span');
+    if (span) {
+      if (li.dataset.tab === tab) span.classList.remove('text-gray-400');
+      else span.classList.add('text-gray-400');
+    }
   });
   document.getElementById('tab-overview').classList.toggle('hidden', tab !== 'overview');
   document.getElementById('tab-orders').classList.toggle('hidden', tab !== 'orders');
   document.getElementById('tab-profile').classList.toggle('hidden', tab !== 'profile');
+
+  // Update page header + mobile topbar title
+  const meta = TAB_TITLES[tab] || { title: tab, subtitle: '' };
+  const title = document.getElementById('page-title');
+  const sub = document.getElementById('page-subtitle');
+  const mobileTitle = document.getElementById('mobile-page-title');
+  if (title) title.textContent = meta.title;
+  // Don't overwrite the welcome subtitle; only swap when the tab has a real description
+  if (sub && meta.subtitle && tab !== 'overview') sub.textContent = meta.subtitle;
+  if (mobileTitle) mobileTitle.textContent = meta.title;
+
   if (tab === 'orders') loadMyOrders();
+
+  // Auto-close drawer on mobile when navigating
+  if (window.innerWidth < 768) closeDrawer();
 }
 
 let _ordersFilter = 'open';
@@ -524,7 +680,7 @@ function renderOrderCard(o) {
   const isPacked = o.packing_status === 'packed' || o.packing_status === 'dropped_off';
   const pillCls = isPacked
     ? 'bg-green-50 text-green-700'
-    : (o.packing_status === 'awaiting_packing' ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-600');
+    : (o.packing_status === 'awaiting_packing' ? 'bg-brand-50 text-brand-700' : 'bg-surface-100 text-gray-600');
 
   const items = (() => {
     try {
@@ -536,33 +692,29 @@ function renderOrderCard(o) {
     } catch { return ''; }
   })();
 
-  // Action buttons. Reject + mark packed available on open orders;
-  // mark dropped-off available once packed (so the packer can split
-  // the workflow over two button presses if they pack everything
-  // first and walk to the locker / hand over later).
   let actions = '';
   if (!isPacked) {
     if (o.packing_status === 'packed') {
       actions =
         '<div class="flex flex-col gap-2 flex-shrink-0">' +
           '<button onclick="markMyOrderDroppedOff(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-full text-xs">Mark dropped off</button>' +
+          'class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-full text-xs transition-all">Mark dropped off</button>' +
           '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs">Reject</button>' +
+          'class="px-3 py-1.5 bg-surface-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs transition-all">Reject</button>' +
         '</div>';
     } else {
       actions =
         '<div class="flex flex-col gap-2 flex-shrink-0">' +
           '<button onclick="markMyOrderPacked(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-gray-900 font-semibold rounded-full text-xs">Mark packed</button>' +
+          'class="px-3 py-1.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Mark packed</button>' +
           '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-gray-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs">Reject</button>' +
+          'class="px-3 py-1.5 bg-surface-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs transition-all">Reject</button>' +
         '</div>';
     }
   }
 
   return (
-    '<div class="border border-gray-100 rounded-xl p-4 flex items-start justify-between gap-3">' +
+    '<div class="border border-gray-100 rounded-2xl p-4 flex items-start justify-between gap-3">' +
       '<div class="min-w-0 flex-1">' +
         '<div class="flex items-center gap-2">' +
           '<div class="font-semibold text-sm">' + escapeHtml(o.order_number) + '</div>' +
@@ -680,7 +832,28 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+// Mobile drawer
+function openDrawer() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  sb.classList.add('drawer-open');
+  bd.classList.add('visible');
+  document.body.style.overflow = 'hidden';
+}
+function closeDrawer() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  sb.classList.remove('drawer-open');
+  bd.classList.remove('visible');
+  document.body.style.overflow = '';
+}
+window.addEventListener('resize', () => {
+  if (window.innerWidth >= 768) closeDrawer();
+});
+
 load();
+// Initial icon paint for the not-authed / loading states
+if (window.lucide && lucide.createIcons) lucide.createIcons();
 </script>
 </body>
 </html>
