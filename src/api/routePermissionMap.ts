@@ -147,6 +147,20 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   },
   {
     router: 'packerAuthRoutes',
+    method: 'GET',
+    path: '/packer-auth/orders',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer reads only their own assigned orders',
+  },
+  {
+    router: 'packerAuthRoutes',
+    method: 'POST',
+    path: '/packer-auth/orders/:id/reject',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer rejects orders assigned to themselves only',
+  },
+  {
+    router: 'packerAuthRoutes',
     method: 'POST',
     path: '/packer-auth/logout',
     permission: 'auth-only',

@@ -345,6 +345,123 @@ router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
 });
 
 // ---------------------------------------------------------------------------
+// GET /packer-auth/orders
+// ---------------------------------------------------------------------------
+
+/**
+ * Orders currently assigned to this packer. Filterable by status:
+ *   ?status=open       (default — courier-eligible, not yet packed)
+ *   ?status=packed     (already marked packed/dropped off)
+ *   ?status=all        (every order ever assigned to me)
+ *
+ * Per-row counts (today / week / all-time) are returned in
+ * `data.counters` so the dashboard can render packing performance
+ * without a second round-trip.
+ */
+router.get('/orders', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const filter = String(req.query.status || 'open').toLowerCase();
+
+  let q = db('orders')
+    .where({ assigned_packer_id: packerId })
+    .orderBy('assigned_packer_at', 'desc')
+    .limit(100);
+
+  if (filter === 'open') {
+    q = q.whereNotIn('packing_status', ['packed', 'dropped_off']);
+  } else if (filter === 'packed') {
+    q = q.whereIn('packing_status', ['packed', 'dropped_off']);
+  }
+
+  const orders = await q.select(
+    'id', 'order_number', 'customer_name', 'customer_phone',
+    'delivery_method', 'delivery_address', 'line_items',
+    'waybill', 'pincode',
+    'terminal_id', 'nearest_locker_name',
+    'collection_terminal_id',
+    'status', 'packing_status', 'shopify_fulfillment_status',
+    'assigned_packer_at',
+    'created_at', 'packed_at', 'dropped_off_at',
+  );
+
+  // Counters: how many of mine have been packed today / this week / ever.
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfWeek = new Date();
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
+
+  const [today, week, allTime, openCount] = await Promise.all([
+    db('orders').where({ assigned_packer_id: packerId }).whereIn('packing_status', ['packed', 'dropped_off'])
+      .where('packed_at', '>=', startOfDay).count('* as n').first(),
+    db('orders').where({ assigned_packer_id: packerId }).whereIn('packing_status', ['packed', 'dropped_off'])
+      .where('packed_at', '>=', startOfWeek).count('* as n').first(),
+    db('orders').where({ assigned_packer_id: packerId }).whereIn('packing_status', ['packed', 'dropped_off'])
+      .count('* as n').first(),
+    db('orders').where({ assigned_packer_id: packerId })
+      .whereNotIn('packing_status', ['packed', 'dropped_off']).count('* as n').first(),
+  ]);
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      orders,
+      counters: {
+        open: Number((openCount as any)?.n || 0),
+        packed_today: Number((today as any)?.n || 0),
+        packed_this_week: Number((week as any)?.n || 0),
+        packed_all_time: Number((allTime as any)?.n || 0),
+      },
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /packer-auth/orders/:id/reject
+// ---------------------------------------------------------------------------
+
+/**
+ * Decline an assigned order. Body: { reason? } (max 200 chars).
+ * Re-runs the assigner against the rest of the tenant's pool,
+ * skipping this packer. Returns the new assignee id (or null when
+ * nobody else is eligible — the order goes back into the tenant's
+ * unassigned pool, the operator can pick from the Packing tab).
+ */
+router.post('/orders/:id/reject', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const orderId = req.params.id as string;
+  const reason = (req.body?.reason || '').toString().trim() || 'declined';
+
+  // Look up the order's tenant — we don't trust the client to tell us.
+  const order = await db('orders').where({ id: orderId, assigned_packer_id: packerId }).first('tenant_id');
+  if (!order) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not assigned to you' } });
+  }
+
+  try {
+    // Lazy import to avoid loading the assigner on routes that don't need it.
+    const { rejectPackerAssignment } = await import('../packerAuth/assigner');
+    const result = await rejectPackerAssignment({
+      tenantId: order.tenant_id,
+      orderId,
+      rejectingPackerId: packerId,
+      reason,
+    });
+    log.info({ packerId, orderId, reassigned_to: result.reassigned_to?.packer_id || null }, 'Packer rejected assignment');
+    return res.status(200).json({
+      success: true,
+      data: {
+        reassigned_to_packer_id: result.reassigned_to?.packer_id || null,
+        unassigned: !result.reassigned_to,
+      },
+    });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: { code: 'REJECT_FAILED', message: err.message } });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /packer-auth/logout
 // ---------------------------------------------------------------------------
 

@@ -149,22 +149,231 @@ export async function selectEligiblePacker(
  * row's creation. If the order ultimately fails to submit and the
  * transaction rolls back, the counter is rolled back too — no wasted
  * slots on the packer's load counter.
+ *
+ * Also appends a fresh entry to `assigned_packer_history` so the
+ * tenant has a full audit trail of who was assigned this order over
+ * time (useful when investigating reject/reassign loops).
  */
 export async function commitPackerAssignment(args: {
   trx: Knex.Transaction;
   orderId: string;
   packerId: string;
   linkId: string;
+  packerEmail?: string | null;
 }): Promise<void> {
-  const { trx, orderId, packerId, linkId } = args;
+  const { trx, orderId, packerId, linkId, packerEmail } = args;
+  const now = new Date();
+
+  // Read existing history (might be null on first assignment)
+  const existing = await trx('orders').where({ id: orderId }).first('assigned_packer_history');
+  const history = Array.isArray(existing?.assigned_packer_history) ? existing.assigned_packer_history : [];
+  history.push({
+    packer_id: packerId,
+    packer_email: packerEmail || null,
+    assigned_at: now.toISOString(),
+    rejected_at: null,
+    reject_reason: null,
+  });
+
   await trx('orders').where({ id: orderId }).update({
     assigned_packer_id: packerId,
-    updated_at: new Date(),
+    assigned_packer_at: now,
+    assigned_packer_history: JSON.stringify(history),
+    updated_at: now,
   });
   await trx('packer_tenant_links').where({ id: linkId }).increment('orders_assigned_count', 1);
   await trx('packer_tenant_links').where({ id: linkId }).update({
-    last_assigned_at: new Date(),
-    updated_at: new Date(),
+    last_assigned_at: now,
+    updated_at: now,
   });
   log.info({ orderId, packer_id: packerId, link_id: linkId }, 'Packer assignment committed');
+}
+
+/**
+ * Reject the current packer's assignment on an order and try to
+ * pick a different eligible packer. Atomic — both writes happen in
+ * one transaction so the rejecting packer is never "stuck" with
+ * the order even if reassignment fails.
+ *
+ * Behaviour:
+ *   - Marks the current history entry rejected_at + reject_reason.
+ *   - Decrements the rejecting link's orders_assigned_count (the
+ *     packer didn't actually pack it).
+ *   - Calls selectEligiblePacker again, EXCLUDING the rejecting
+ *     packer, and stamps the new assignee + appends a fresh history
+ *     entry. If no other packer is eligible, leaves the order
+ *     unassigned (assigned_packer_id = null) so a tenant operator
+ *     can intervene from the Packing tab.
+ *
+ * Returns the new assignment (or null if reassignment didn't find a
+ * candidate).
+ */
+export async function rejectPackerAssignment(args: {
+  tenantId: string;
+  orderId: string;
+  rejectingPackerId: string;
+  reason: string;
+}): Promise<{ reassigned_to: PackerSelection | null }> {
+  const db = getDb();
+  const { tenantId, orderId, rejectingPackerId, reason } = args;
+
+  const order = await db('orders')
+    .where({ id: orderId, tenant_id: tenantId })
+    .first('id', 'assigned_packer_id', 'assigned_packer_history');
+  if (!order) {
+    throw new Error('Order not found');
+  }
+  if (order.assigned_packer_id !== rejectingPackerId) {
+    throw new Error('Order is not assigned to you');
+  }
+
+  const rejectingLink = await db('packer_tenant_links')
+    .where({ tenant_id: tenantId, packer_id: rejectingPackerId })
+    .first('id', 'orders_assigned_count');
+
+  // Pick a replacement BEFORE writing anything, so we can encode the
+  // outcome in a single transaction below.
+  const replacement = await selectEligiblePackerExcluding(tenantId, rejectingPackerId);
+
+  await db.transaction(async (trx) => {
+    // Update history: close the current entry, append the next if any.
+    const history = Array.isArray(order.assigned_packer_history)
+      ? order.assigned_packer_history.slice()
+      : [];
+    if (history.length && history[history.length - 1].rejected_at == null) {
+      history[history.length - 1].rejected_at = new Date().toISOString();
+      history[history.length - 1].reject_reason = (reason || '').slice(0, 200);
+    }
+
+    if (replacement) {
+      history.push({
+        packer_id: replacement.packer_id,
+        packer_email: null,
+        assigned_at: new Date().toISOString(),
+        rejected_at: null,
+        reject_reason: null,
+      });
+      await trx('orders').where({ id: orderId }).update({
+        assigned_packer_id: replacement.packer_id,
+        assigned_packer_at: new Date(),
+        assigned_packer_history: JSON.stringify(history),
+        updated_at: new Date(),
+      });
+      await trx('packer_tenant_links').where({ id: replacement.link_id }).increment('orders_assigned_count', 1);
+      await trx('packer_tenant_links').where({ id: replacement.link_id }).update({
+        last_assigned_at: new Date(),
+        updated_at: new Date(),
+      });
+    } else {
+      await trx('orders').where({ id: orderId }).update({
+        assigned_packer_id: null,
+        assigned_packer_at: null,
+        assigned_packer_history: JSON.stringify(history),
+        updated_at: new Date(),
+      });
+    }
+
+    // Decrement the rejecting link's counter so its load weight is fair.
+    if (rejectingLink && rejectingLink.orders_assigned_count > 0) {
+      await trx('packer_tenant_links')
+        .where({ id: rejectingLink.id })
+        .update({
+          orders_assigned_count: Math.max(0, rejectingLink.orders_assigned_count - 1),
+          updated_at: new Date(),
+        });
+    }
+  });
+
+  log.info({
+    tenantId,
+    orderId,
+    rejecting_packer_id: rejectingPackerId,
+    reassigned_to: replacement?.packer_id || null,
+    reason: (reason || '').slice(0, 200),
+  }, 'Packer rejected assignment');
+
+  return { reassigned_to: replacement };
+}
+
+/**
+ * Same selection algorithm as selectEligiblePacker but skips the
+ * given packer id. Used by the reject flow so the rejecting packer
+ * doesn't get re-assigned the order they just declined.
+ */
+async function selectEligiblePackerExcluding(
+  tenantId: string,
+  excludePackerId: string,
+): Promise<PackerSelection | null> {
+  const db = getDb();
+  const settings = await db('tenant_collection_settings')
+    .where({ tenant_id: tenantId })
+    .first('packer_assignment_mode');
+
+  const mode = (settings?.packer_assignment_mode || 'off').toLowerCase();
+  if (mode === 'off' || mode === 'internal_first') {
+    return null;
+  }
+
+  const candidates = await db('packer_tenant_links as l')
+    .join('packers as p', 'p.id', 'l.packer_id')
+    .where('l.tenant_id', tenantId)
+    .where('l.status', 'active')
+    .whereNot('p.status', 'disabled')
+    .whereNot('l.packer_id', excludePackerId)
+    .where('l.load_weight', '>', 0)
+    .andWhere(function () {
+      this
+        .whereNotNull('p.collection_terminal_id')
+        .orWhereRaw(
+          "p.collection_door_address IS NOT NULL " +
+          "AND (p.collection_door_address->>'street_address' <> '' " +
+          "  OR p.collection_door_address->>'street' <> '' " +
+          "  OR p.collection_door_address->>'city' <> '')",
+        );
+    })
+    .orderBy('l.last_assigned_at', 'asc', 'first')
+    .select(
+      'l.id as link_id',
+      'l.load_weight',
+      'l.orders_assigned_count',
+      'p.id as packer_id',
+      'p.full_name',
+      'p.business_name',
+      'p.phone',
+      'p.collection_terminal_id',
+      'p.collection_locker_name',
+      'p.collection_door_address',
+      'p.collection_contact_name',
+      'p.collection_contact_phone',
+      'p.collection_contact_email',
+    );
+
+  if (!candidates.length) return null;
+
+  let chosen = candidates[0];
+  let bestLoad = chosen.orders_assigned_count / Math.max(chosen.load_weight, 1);
+  for (const cand of candidates.slice(1)) {
+    const load = cand.orders_assigned_count / Math.max(cand.load_weight, 1);
+    if (load < bestLoad) {
+      bestLoad = load;
+      chosen = cand;
+    }
+  }
+
+  return {
+    packer_id: chosen.packer_id,
+    link_id: chosen.link_id,
+    profile: {
+      packer_id: chosen.packer_id,
+      full_name: chosen.full_name,
+      business_name: chosen.business_name,
+      phone: chosen.phone,
+      collection_terminal_id: chosen.collection_terminal_id,
+      collection_locker_name: chosen.collection_locker_name,
+      collection_door_address: chosen.collection_door_address,
+      collection_contact_name: chosen.collection_contact_name,
+      collection_contact_phone: chosen.collection_contact_phone,
+      collection_contact_email: chosen.collection_contact_email,
+    },
+  };
 }
