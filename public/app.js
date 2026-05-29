@@ -4664,6 +4664,7 @@ async function renderPackers() {
   }
   const links = data.data.links || [];
   const invites = data.data.invites || [];
+  const settings = data.data.settings || { packer_assignment_mode: 'off' };
   const pendingInvites = invites.filter(i => i.status === 'pending');
   const recentInvites = invites.filter(i => i.status !== 'pending').slice(0, 8);
 
@@ -4688,6 +4689,32 @@ async function renderPackers() {
   if (canInvite) {
     html += `<button onclick="showPackerInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Invite Packer</button>`;
   }
+  html += `</div>`;
+
+  // Distribution mode selector
+  const mode = settings.packer_assignment_mode || 'off';
+  const modeLabels = {
+    off: 'Off — never assign to independent packers',
+    independents_only: 'Independents only — round-robin to linked packers',
+    split_evenly: 'Split evenly with internal team',
+    internal_first: 'Internal first, fall back to packers',
+  };
+  html += `<div class="bg-white rounded-3xl shadow-card p-5 mb-6">`;
+  html += `<div class="flex items-center justify-between gap-4 flex-wrap">`;
+  html += `<div class="min-w-0">`;
+  html += `<div class="font-semibold text-sm">Order distribution</div>`;
+  html += `<div class="text-xs text-gray-500 mt-0.5">When a new order is processed, decide whether the courier picks up from your address or from a linked independent packer.</div>`;
+  html += `</div>`;
+  if (canManage) {
+    html += `<select id="packer-mode-select" onchange="savePackerMode()" class="bg-surface-100 rounded-xl px-3 py-2 text-sm border-0 min-w-[280px]">`;
+    Object.entries(modeLabels).forEach(([k, label]) => {
+      html += `<option value="${k}" ${k===mode?'selected':''}>${escapeHtml(label)}</option>`;
+    });
+    html += `</select>`;
+  } else {
+    html += `<div class="text-sm bg-surface-100 rounded-xl px-3 py-2">${escapeHtml(modeLabels[mode] || mode)}</div>`;
+  }
+  html += `</div>`;
   html += `</div>`;
 
   // Linked packers table
@@ -4937,4 +4964,19 @@ async function unlinkPacker(id, displayName) {
   const { data } = await api('POST', `/packers/links/${id}/unlink`, { reason: (reason || '').slice(0, 30) });
   if (data && data.success) { toast('Packer unlinked', 'info'); renderPackers(); }
   else toast(data?.error?.message || 'Failed', 'error');
+}
+
+
+async function savePackerMode() {
+  const sel = document.getElementById('packer-mode-select');
+  if (!sel) return;
+  const mode = sel.value;
+  const { data } = await api('PUT', '/packers/settings', { packer_assignment_mode: mode });
+  if (data && data.success) {
+    toast('Distribution mode updated', 'success');
+  } else {
+    toast(data?.error?.message || 'Failed to update mode', 'error');
+    // Re-render to revert the dropdown to the persisted value
+    renderPackers();
+  }
 }

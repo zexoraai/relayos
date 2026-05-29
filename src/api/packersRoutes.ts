@@ -58,7 +58,20 @@ router.get('/links', requirePermission('packers.view'), async (req: Authenticate
     .limit(20)
     .select('id', 'email', 'status', 'load_weight', 'note', 'expires_at', 'created_at', 'accepted_at');
 
-  return res.status(200).json({ success: true, data: { links, invites } });
+  const settings = await db('tenant_collection_settings')
+    .where({ tenant_id: tenantId })
+    .first('packer_assignment_mode');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      links,
+      invites,
+      settings: {
+        packer_assignment_mode: settings?.packer_assignment_mode || 'off',
+      },
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -225,6 +238,53 @@ router.post('/links/:id/unlink', requirePermission('packers.manage'), async (req
   }
   log.info({ tenantId, linkId: id, by: req.tenant?.email }, 'Packer link kicked by tenant');
   return res.status(200).json({ success: true, data: { id, status: 'kicked' } });
+});
+
+// ---------------------------------------------------------------------------
+// PUT /packers/settings — assignment mode (Phase 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Toggle the tenant's packer assignment mode. Body:
+ *   { packer_assignment_mode: 'off' | 'independents_only' | 'split_evenly' | 'internal_first' }
+ *
+ * The pipeline's PAYLOAD_CREATED stage reads this on every order to
+ * decide whether to route the courier handoff to an independent
+ * packer's collection point. Modes are upserted on
+ * tenant_collection_settings (one row per tenant) so the same row
+ * the existing settings UI writes through is the single source of
+ * truth.
+ */
+const VALID_MODES = ['off', 'independents_only', 'split_evenly', 'internal_first'];
+
+router.put('/settings', requirePermission('packers.manage'), async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const { packer_assignment_mode } = req.body || {};
+  if (!VALID_MODES.includes(packer_assignment_mode)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_MODE', message: `packer_assignment_mode must be one of: ${VALID_MODES.join(', ')}` },
+    });
+  }
+
+  // Upsert the row — most tenants already have one (created when they
+  // configured collection contact in Settings), but defensive in case
+  // a tenant gets here before that.
+  const existing = await db('tenant_collection_settings').where({ tenant_id: tenantId }).first();
+  if (existing) {
+    await db('tenant_collection_settings')
+      .where({ tenant_id: tenantId })
+      .update({ packer_assignment_mode, updated_at: new Date() });
+  } else {
+    await db('tenant_collection_settings').insert({
+      tenant_id: tenantId,
+      packer_assignment_mode,
+    });
+  }
+
+  log.info({ tenantId, packer_assignment_mode, by: req.tenant?.email }, 'Packer assignment mode updated');
+  return res.status(200).json({ success: true, data: { packer_assignment_mode } });
 });
 
 export default router;

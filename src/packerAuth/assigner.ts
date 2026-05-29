@@ -1,0 +1,170 @@
+import type { Knex } from 'knex';
+import { getDb } from '../db/connection';
+import { createChildLogger } from '../observability/logger';
+
+const log = createChildLogger({ module: 'packer-assigner' });
+
+export interface PackerCollectionProfile {
+  packer_id: string;
+  full_name: string | null;
+  business_name: string | null;
+  phone: string | null;
+  collection_terminal_id: string | null;
+  collection_locker_name: string | null;
+  collection_door_address: any | null;
+  collection_contact_name: string | null;
+  collection_contact_phone: string | null;
+  collection_contact_email: string | null;
+}
+
+export interface PackerSelection {
+  packer_id: string;
+  link_id: string;
+  profile: PackerCollectionProfile;
+}
+
+/**
+ * Pick an independent packer for a new order using a lowest-cumulative-load
+ * round-robin over active links. Returns the chosen packer + link or null if
+ * the tenant has no eligible packer (then the caller falls back to the
+ * tenant's own collection address — the order isn't blocked).
+ *
+ * READ-ONLY. No DB writes happen here. Use `commitPackerAssignment` after
+ * the order row is created to stamp + increment counters atomically.
+ *
+ * Mode semantics:
+ *   off                — never assigns; returns null (default for existing
+ *                        tenants — keeps behaviour identical until they
+ *                        explicitly opt in).
+ *   independents_only  — always tries to assign; if no packer available,
+ *                        returns null and the caller uses the tenant's
+ *                        own collection address.
+ *   split_evenly       — same as independents_only for now (reserved for
+ *                        tie-breaking with internal teams later).
+ *   internal_first     — reserved; currently behaves like 'off'.
+ *
+ * Eligibility:
+ *   - link.status = 'active'
+ *   - packer.status != 'disabled'
+ *   - link.load_weight > 0
+ *   - packer has at least ONE collection point: a locker terminal_id OR
+ *     a collection_door_address with a street/city. A packer with no
+ *     usable collection point can't actually receive orders, so we skip
+ *     them rather than stamping an order we can't ship.
+ */
+export async function selectEligiblePacker(
+  tenantId: string,
+): Promise<PackerSelection | null> {
+  const db = getDb();
+
+  const settings = await db('tenant_collection_settings')
+    .where({ tenant_id: tenantId })
+    .first('packer_assignment_mode');
+
+  const mode = (settings?.packer_assignment_mode || 'off').toLowerCase();
+  if (mode === 'off' || mode === 'internal_first') {
+    return null;
+  }
+
+  const candidates = await db('packer_tenant_links as l')
+    .join('packers as p', 'p.id', 'l.packer_id')
+    .where('l.tenant_id', tenantId)
+    .where('l.status', 'active')
+    .whereNot('p.status', 'disabled')
+    .where('l.load_weight', '>', 0)
+    .andWhere(function () {
+      this
+        .whereNotNull('p.collection_terminal_id')
+        .orWhereRaw(
+          "p.collection_door_address IS NOT NULL " +
+          "AND (p.collection_door_address->>'street_address' <> '' " +
+          "  OR p.collection_door_address->>'street' <> '' " +
+          "  OR p.collection_door_address->>'city' <> '')",
+        );
+    })
+    .orderBy('l.last_assigned_at', 'asc', 'first')
+    .select(
+      'l.id as link_id',
+      'l.load_weight',
+      'l.orders_assigned_count',
+      'p.id as packer_id',
+      'p.full_name',
+      'p.business_name',
+      'p.phone',
+      'p.collection_terminal_id',
+      'p.collection_locker_name',
+      'p.collection_door_address',
+      'p.collection_contact_name',
+      'p.collection_contact_phone',
+      'p.collection_contact_email',
+    );
+
+  if (!candidates.length) {
+    log.info({ tenantId, mode }, 'No eligible independent packer; falling back to tenant defaults');
+    return null;
+  }
+
+  // Cumulative load = orders_assigned_count / load_weight. Lowest wins;
+  // ties broken by oldest last_assigned_at (already pre-sorted).
+  let chosen = candidates[0];
+  let bestLoad = chosen.orders_assigned_count / Math.max(chosen.load_weight, 1);
+  for (const cand of candidates.slice(1)) {
+    const load = cand.orders_assigned_count / Math.max(cand.load_weight, 1);
+    if (load < bestLoad) {
+      bestLoad = load;
+      chosen = cand;
+    }
+  }
+
+  log.info({
+    tenantId,
+    packer_id: chosen.packer_id,
+    link_id: chosen.link_id,
+    cumulative_load: bestLoad,
+    mode,
+  }, 'Selected independent packer for order');
+
+  return {
+    packer_id: chosen.packer_id,
+    link_id: chosen.link_id,
+    profile: {
+      packer_id: chosen.packer_id,
+      full_name: chosen.full_name,
+      business_name: chosen.business_name,
+      phone: chosen.phone,
+      collection_terminal_id: chosen.collection_terminal_id,
+      collection_locker_name: chosen.collection_locker_name,
+      collection_door_address: chosen.collection_door_address,
+      collection_contact_name: chosen.collection_contact_name,
+      collection_contact_phone: chosen.collection_contact_phone,
+      collection_contact_email: chosen.collection_contact_email,
+    },
+  };
+}
+
+/**
+ * Stamp `assigned_packer_id` on the order and bump the link's
+ * `orders_assigned_count` + `last_assigned_at`. Runs inside the caller's
+ * transaction so the increment is committed atomically with the order
+ * row's creation. If the order ultimately fails to submit and the
+ * transaction rolls back, the counter is rolled back too — no wasted
+ * slots on the packer's load counter.
+ */
+export async function commitPackerAssignment(args: {
+  trx: Knex.Transaction;
+  orderId: string;
+  packerId: string;
+  linkId: string;
+}): Promise<void> {
+  const { trx, orderId, packerId, linkId } = args;
+  await trx('orders').where({ id: orderId }).update({
+    assigned_packer_id: packerId,
+    updated_at: new Date(),
+  });
+  await trx('packer_tenant_links').where({ id: linkId }).increment('orders_assigned_count', 1);
+  await trx('packer_tenant_links').where({ id: linkId }).update({
+    last_assigned_at: new Date(),
+    updated_at: new Date(),
+  });
+  log.info({ orderId, packer_id: packerId, link_id: linkId }, 'Packer assignment committed');
+}

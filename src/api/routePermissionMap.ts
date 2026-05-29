@@ -350,6 +350,7 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'packersRoutes', method: 'POST', path: '/packers/invites/:id/revoke', permission: PERMISSIONS.PACKERS.INVITE },
   { router: 'packersRoutes', method: 'PUT', path: '/packers/links/:id', permission: PERMISSIONS.PACKERS.MANAGE },
   { router: 'packersRoutes', method: 'POST', path: '/packers/links/:id/unlink', permission: PERMISSIONS.PACKERS.MANAGE },
+  { router: 'packersRoutes', method: 'PUT', path: '/packers/settings', permission: PERMISSIONS.PACKERS.MANAGE },
 
   // ------------------------------------------------------------------
   // ordersRoutes.ts (mounted at /orders)

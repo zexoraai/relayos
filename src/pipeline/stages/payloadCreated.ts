@@ -4,6 +4,7 @@ import { PipelineStage, PipelineStatus } from '../types';
 import { CustomerData } from './customerData';
 import { LockersResolvedResult } from './lockersResolved';
 import { DeliveryAddress } from './locationResolved';
+import { selectEligiblePacker, PackerSelection } from '../../packerAuth/assigner';
 
 const log = createChildLogger({ module: 'pipeline:payload-created' });
 
@@ -38,6 +39,14 @@ export interface PudoPayload {
   opt_in_rates?: any[];
   opt_in_time_based_rates?: any[];
   service_level_code: string;
+  /**
+   * When the tenant has independent-packer assignment enabled and a
+   * packer was selected for this order, the courierSubmitted stage
+   * uses these to stamp `orders.assigned_packer_id` and increment the
+   * link's load counter inside the same transaction that creates the
+   * order row.
+   */
+  _assigned_packer?: { packer_id: string; link_id: string };
 }
 
 /**
@@ -65,7 +74,7 @@ export async function executePayloadCreated(
 ): Promise<PudoPayload> {
   const db = getDb();
 
-  const collectionSettings = await db('tenant_collection_settings')
+  let collectionSettings = await db('tenant_collection_settings')
     .where({ tenant_id: tenantId })
     .first();
 
@@ -118,6 +127,30 @@ export async function executePayloadCreated(
     }
   }
 
+  // Independent-packer assignment.
+  //
+  // When the tenant has packer_assignment_mode enabled AND a linked
+  // packer with a usable collection profile exists, we route the
+  // courier handoff to that packer's collection point instead of the
+  // tenant's own. The selection is read-only here; the orderRow's
+  // assigned_packer_id and the link's counter only get committed when
+  // courierSubmitted creates the orders row (so a failed submission
+  // doesn't burn a slot on the packer's load).
+  let assignedPacker: PackerSelection | null = null;
+  try {
+    const candidate = await selectEligiblePacker(tenantId);
+    if (candidate) {
+      const overlaid = overlayPackerCollection(collectionSettings, candidate, method);
+      if (overlaid) {
+        collectionSettings = overlaid;
+        assignedPacker = candidate;
+      }
+    }
+  } catch (err: any) {
+    // Assignment failure is non-fatal — fall through to tenant defaults.
+    log.warn({ tenantId, error: err.message }, 'Packer assignment errored; using tenant defaults');
+  }
+
   let payload: PudoPayload;
   switch (method) {
     case 'locker-to-locker':
@@ -140,6 +173,17 @@ export async function executePayloadCreated(
   // The service code from the map is authoritative — a builder that returns
   // a different one is a bug. Pin it explicitly so the row matches the address shape.
   payload.service_level_code = serviceCode;
+
+  // Carry the assigned-packer hint forward so courierSubmitted can stamp
+  // the order row + bump the link counter inside the same transaction
+  // that creates the order. We deliberately don't write to the orders
+  // table here — the row doesn't exist yet at this stage.
+  if (assignedPacker) {
+    payload._assigned_packer = {
+      packer_id: assignedPacker.packer_id,
+      link_id: assignedPacker.link_id,
+    };
+  }
 
   await db('pipeline_stage_results').insert({
     pipeline_job_id: jobId,
@@ -170,6 +214,81 @@ export async function executePayloadCreated(
   }, 'PUDO payload created');
 
   return payload;
+}
+
+// --- Packer override -------------------------------------------------------
+
+/**
+ * Produce a copy of `tenant_collection_settings` with the packer's own
+ * collection profile layered on top, so the four payload builders below
+ * naturally pick up the packer's pickup point + contact details.
+ *
+ * Method-aware:
+ *   - For locker collections (locker-to-*) we need a packer terminal_id.
+ *     If the packer didn't set one, we don't override — fall back to
+ *     the tenant's locker so we don't block on an empty profile.
+ *   - For door collections (door-to-*) we need a packer door address
+ *     with at least street/city. Same fallback if missing.
+ *
+ * Returns null when the packer's profile has nothing usable for this
+ * method's collection type — the caller then keeps the tenant defaults
+ * untouched. The contact fields are layered independently of the
+ * pickup point: a packer-provided contact name/phone/email is used
+ * even when the pickup point itself comes from the tenant.
+ */
+function overlayPackerCollection(
+  baseSettings: any,
+  selection: PackerSelection,
+  method: string,
+): any | null {
+  const p = selection.profile;
+  const wantsLocker = method.startsWith('locker-');
+  const wantsDoor = method.startsWith('door-');
+
+  const overlay: any = { ...baseSettings };
+  let appliedPickup = false;
+
+  if (wantsLocker) {
+    if (p.collection_terminal_id) {
+      overlay.collection_terminal_id = p.collection_terminal_id;
+      // Locker name is purely cosmetic but keep the packer's so the
+      // audit trail / log line shows where the courier went.
+      if (p.collection_locker_name) overlay.collection_locker_name = p.collection_locker_name;
+      appliedPickup = true;
+    }
+  } else if (wantsDoor) {
+    const addr = p.collection_door_address;
+    if (addr && (addr.street_address || addr.street || addr.city)) {
+      // Normalise the packer's door address shape to the same one the
+      // tenant uses (street_address vs street). The collectionDoorAddress
+      // helper below reads street_address; map both.
+      overlay.collection_address = {
+        street_address: addr.street_address || addr.street || '',
+        local_area: addr.local_area || '',
+        suburb: addr.suburb || '',
+        city: addr.city || '',
+        code: addr.code || addr.postal_code || '',
+        zone: addr.zone || addr.province || '',
+        country: addr.country || 'South Africa',
+        type: addr.type || 'business',
+        lat: addr.lat ?? null,
+        lng: addr.lng ?? null,
+      };
+      appliedPickup = true;
+    }
+  }
+
+  if (!appliedPickup) return null;
+
+  // Contact override: prefer packer-supplied contact, fall back to
+  // packer identity, then tenant defaults — never produce blanks
+  // because the contactFromSettings() helper below stamps these
+  // straight onto the courier payload.
+  overlay.contact_name = p.collection_contact_name || p.full_name || baseSettings.contact_name;
+  overlay.contact_phone = p.collection_contact_phone || p.phone || baseSettings.contact_phone;
+  overlay.contact_email = p.collection_contact_email || baseSettings.contact_email;
+
+  return overlay;
 }
 
 // --- Builders ---------------------------------------------------------------

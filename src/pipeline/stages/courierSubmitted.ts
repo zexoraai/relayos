@@ -9,6 +9,7 @@ import { LockersResolvedResult } from './lockersResolved';
 import { upsertCustomer, linkOrderToCustomer } from '../../customers';
 import { emitEvent, DomainEventType } from '../../events';
 import { withIdempotency, makeKey, IdempotencyInProgressError } from '../../idempotency';
+import { commitPackerAssignment } from '../../packerAuth/assigner';
 
 const log = createChildLogger({ module: 'pipeline:courier-submitted' });
 
@@ -146,6 +147,19 @@ export async function executeCourierSubmitted(
       const customerId = await upsertCustomer(tenantId, customerData.customerPhone, customerData.customerName);
       if (customerId) {
         await trx('orders').where({ id: orderId }).update({ customer_id: customerId, updated_at: new Date() });
+      }
+
+      // Independent-packer assignment: if payloadCreated picked one,
+      // stamp the order + bump the link's load counter atomically with
+      // the order's existence. If this transaction rolls back the
+      // counter rolls back too — no wasted slots on the packer.
+      if (payload._assigned_packer) {
+        await commitPackerAssignment({
+          trx,
+          orderId,
+          packerId: payload._assigned_packer.packer_id,
+          linkId: payload._assigned_packer.link_id,
+        });
       }
 
       // Emit ORDER_CONFIRMED in the same transaction — outbox guarantees delivery
