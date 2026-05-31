@@ -40,6 +40,7 @@ router.get('/queue', requirePermission('orders.view'), async (req: Authenticated
     'delivery_method', 'delivery_address', 'line_items',
     'waybill', 'pincode', 'terminal_id', 'nearest_locker_name',
     'packing_status', 'packed_at', 'dropped_off_at', 'packing_note',
+    'assigned_packer_id',
     'created_at',
   );
 

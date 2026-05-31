@@ -4099,8 +4099,11 @@ function renderPackingCard(o) {
               <button onclick="revertPacking('${o.id}')" class="w-full mt-2 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert to Awaiting</button>`;
   } else if (o.packing_status === 'dropped_off') {
     const droppedAt = o.dropped_off_at ? new Date(o.dropped_off_at).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-    action = `<div class="mt-4 py-3 bg-green-50 text-green-700 font-semibold rounded-2xl text-sm text-center">Handed to courier${droppedAt ? ' - ' + droppedAt : ''}</div>
-              <button onclick="revertPacking('${o.id}')" class="w-full mt-2 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert</button>`;
+    action = `<div class="mt-4 py-3 bg-green-50 text-green-700 font-semibold rounded-2xl text-sm text-center">Handed to courier${droppedAt ? ' - ' + droppedAt : ''}</div>`;
+    if (o.assigned_packer_id) {
+      action += `<button onclick="openRatePackerModal('${o.assigned_packer_id}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="w-full mt-2 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-xl text-xs transition-all">Rate packer</button>`;
+    }
+    action += `<button onclick="revertPacking('${o.id}')" class="w-full mt-2 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert</button>`;
   }
 
   let html = `<div class="bg-white rounded-3xl shadow-card border ${cfg.border} p-6 hover:shadow-card-hover transition-all">`;
@@ -4168,6 +4171,72 @@ async function revertPacking(orderId) {
   const { data } = await api('POST', `/packer/orders/${orderId}/revert`);
   if (data.success) { toast('Reverted', 'info'); renderPacking(); }
   else toast(data.error?.message || 'Failed', 'error');
+}
+
+// ---- Rate packer modal (per-order) ----
+//
+// Triggered from a Packing card once the order is dropped_off. Opens
+// the standard openModal helper with four 1..5 sliders + a comment
+// field, and POSTs /packers/ratings on submit. The endpoint upserts
+// on (tenant, packer, order), so re-rating just bumps the score.
+
+const PACKER_RATING_CRITERIA = [
+  { key: 'packing_quality', label: 'Packing quality', hint: 'Items secure, presentable, correct.' },
+  { key: 'speed',           label: 'Speed',           hint: 'Turnaround from assignment to drop-off.' },
+  { key: 'communication',   label: 'Communication',   hint: 'Responsive to questions or issues.' },
+  { key: 'reliability',     label: 'Reliability',     hint: 'Accepts assignments, on-time, follows through.' },
+];
+
+function openRatePackerModal(packerId, orderId, orderNumber) {
+  const sliders = PACKER_RATING_CRITERIA.map((c) => `
+    <div>
+      <div class="flex items-baseline justify-between">
+        <label class="text-sm font-semibold">${escapeHtml(c.label)}</label>
+        <span class="text-sm font-bold" id="rp-val-${c.key}">4</span>
+      </div>
+      <input type="range" min="1" max="5" step="1" value="4" id="rp-${c.key}" class="w-full accent-brand-500"
+        oninput="document.getElementById('rp-val-${c.key}').textContent = this.value">
+      <div class="text-[11px] text-gray-400 mt-0.5">${escapeHtml(c.hint)}</div>
+    </div>
+  `).join('');
+
+  const body = `
+    <div class="space-y-4">
+      <div class="text-sm text-gray-500">Rating order <span class="font-mono">${escapeHtml(orderNumber || '')}</span>. Re-rating overwrites the previous score.</div>
+      ${sliders}
+      <div>
+        <label class="block text-xs text-gray-500 uppercase tracking-wide mb-1 font-semibold">Comment <span class="text-gray-400 normal-case font-normal">(optional, only you and admins see this)</span></label>
+        <textarea id="rp-comment" rows="3" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0" placeholder="What stood out, good or bad?"></textarea>
+      </div>
+    </div>
+  `;
+  const footer = `
+    <button onclick="closeModal()" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Cancel</button>
+    <button onclick="submitRatePacker('${packerId}','${orderId}')" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm">Save rating</button>
+  `;
+  openModal('Rate packer', body, footer);
+}
+
+async function submitRatePacker(packerId, orderId) {
+  const score = (key) => parseInt(document.getElementById('rp-' + key).value, 10);
+  const body = {
+    packer_id: packerId,
+    order_id: orderId,
+    packing_quality: score('packing_quality'),
+    speed: score('speed'),
+    communication: score('communication'),
+    reliability: score('reliability'),
+    comment: (document.getElementById('rp-comment').value || '').trim() || null,
+  };
+  const { data } = await api('POST', '/packers/ratings', body);
+  if (data.success) {
+    closeModal();
+    toast('Rating saved', 'success');
+    // Refresh the Packing tab so any aggregate UI we add later picks up the change.
+    if (currentTab === 'packing') renderPacking();
+  } else {
+    toast(data.error?.message || 'Failed to save rating', 'error');
+  }
 }
 
 
@@ -4729,6 +4798,7 @@ async function renderPackers() {
     html += `<thead><tr class="border-b border-gray-100">`;
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Packer</th>`;
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Status</th>`;
+    html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Rating</th>`;
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Load weight</th>`;
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Collection</th>`;
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Orders</th>`;
@@ -4767,6 +4837,15 @@ async function renderPackers() {
       html += `<tr class="border-b border-gray-50 hover:bg-surface-100 transition-all">`;
       html += `<td class="px-5 py-3"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold text-sm">${initial}</div><div><div class="font-medium">${escapeHtml(display)}</div><div class="text-xs text-gray-400">${escapeHtml(l.packer_email||'')}</div>${business}${phone}</div></div></td>`;
       html += `<td class="px-5 py-3">${statusBadge}</td>`;
+      // Rating cell — small star + numeric, shows "—" when nobody has rated yet.
+      const r = l.rating;
+      let ratingCell;
+      if (r && r.count > 0 && r.overall != null) {
+        ratingCell = `<div class="text-sm font-semibold">★ ${r.overall.toFixed(2)}</div><div class="text-xs text-gray-400">${r.count} rating${r.count===1?'':'s'}</div>`;
+      } else {
+        ratingCell = `<span class="text-xs text-gray-400">—</span>`;
+      }
+      html += `<td class="px-5 py-3">${ratingCell}</td>`;
       html += `<td class="px-5 py-3"><span class="font-mono text-sm">${l.load_weight ?? 1}</span></td>`;
       html += `<td class="px-5 py-3">${coll}</td>`;
       html += `<td class="px-5 py-3"><div class="text-sm font-semibold">${l.orders_assigned_count ?? 0}</div><div class="text-xs text-gray-400">Last: ${lastAssigned}</div></td>`;

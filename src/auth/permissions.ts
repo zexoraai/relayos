@@ -82,6 +82,7 @@ export const PERMISSIONS = {
     VIEW: 'packers.view',
     INVITE: 'packers.invite',
     MANAGE: 'packers.manage',  // pause / unlink / weight
+    RATE: 'packers.rate',      // submit ratings on packers' performance
   },
   SYSTEM: {
     HEALTH_VIEW: 'health.view',

@@ -217,6 +217,13 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   },
   {
     router: 'packerAuthRoutes',
+    method: 'GET',
+    path: '/packer-auth/ratings',
+    permission: 'auth-only',
+    justification: 'gated by packerAuthMiddleware — packer reads only their own aggregate rating',
+  },
+  {
+    router: 'packerAuthRoutes',
     method: 'POST',
     path: '/packer-auth/logout',
     permission: 'auth-only',
@@ -421,6 +428,8 @@ export const ROUTE_PERMISSION_MAP: RouteSpec[] = [
   { router: 'packersRoutes', method: 'PUT', path: '/packers/links/:id', permission: PERMISSIONS.PACKERS.MANAGE },
   { router: 'packersRoutes', method: 'POST', path: '/packers/links/:id/unlink', permission: PERMISSIONS.PACKERS.MANAGE },
   { router: 'packersRoutes', method: 'PUT', path: '/packers/settings', permission: PERMISSIONS.PACKERS.MANAGE },
+  { router: 'packersRoutes', method: 'POST', path: '/packers/ratings', permission: PERMISSIONS.PACKERS.RATE },
+  { router: 'packersRoutes', method: 'GET', path: '/packers/:packerId/ratings', permission: PERMISSIONS.PACKERS.VIEW },
 
   // ------------------------------------------------------------------
   // ordersRoutes.ts (mounted at /orders)

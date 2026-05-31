@@ -274,6 +274,17 @@
 
         <!-- Profile tab -->
         <div id="tab-profile" class="hidden">
+          <!-- Aggregate ratings -->
+          <div id="pf-ratings-card" class="bg-white rounded-3xl shadow-card p-6 mb-6 hidden">
+            <div class="flex items-baseline justify-between mb-3">
+              <h3 class="font-semibold text-base">My ratings</h3>
+              <div id="pf-rating-count" class="text-xs text-gray-400"></div>
+            </div>
+            <div id="pf-rating-overall" class="text-3xl font-bold tracking-tight mb-1">—</div>
+            <div class="text-xs text-gray-400 mb-4">Average across all tenants you pack for. Individual scores stay private.</div>
+            <div id="pf-rating-breakdown" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+          </div>
+
           <div class="bg-white rounded-3xl shadow-card p-6">
             <p class="text-sm text-gray-500 mb-5">
               Your contact details and the address tenants should use when
@@ -302,6 +313,25 @@
               </section>
 
               <section>
+                <h3 class="font-semibold text-sm mb-1">Collection point type</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                  Where the courier collects parcels from you. Tenants
+                  use this to decide which orders to assign you.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3" id="pf-type-radios">
+                  <label class="flex items-center gap-2 px-3 py-2.5 bg-surface-100 rounded-xl text-sm cursor-pointer">
+                    <input type="radio" name="collection_point_type" value="locker" class="accent-brand-500"> Locker only
+                  </label>
+                  <label class="flex items-center gap-2 px-3 py-2.5 bg-surface-100 rounded-xl text-sm cursor-pointer">
+                    <input type="radio" name="collection_point_type" value="door" class="accent-brand-500"> Door only
+                  </label>
+                  <label class="flex items-center gap-2 px-3 py-2.5 bg-surface-100 rounded-xl text-sm cursor-pointer">
+                    <input type="radio" name="collection_point_type" value="both" class="accent-brand-500"> Both
+                  </label>
+                </div>
+              </section>
+
+              <section id="pf-section-locker">
                 <h3 class="font-semibold text-sm mb-1">Collection point — locker</h3>
                 <p class="text-xs text-gray-500 mb-3">
                   For locker-to-locker orders. Leave blank if you don't drop at a locker.
@@ -318,7 +348,7 @@
                 </div>
               </section>
 
-              <section>
+              <section id="pf-section-door">
                 <h3 class="font-semibold text-sm mb-1">Collection point — door address</h3>
                 <p class="text-xs text-gray-500 mb-3">
                   For door-collection orders. Used as the courier pickup
@@ -559,15 +589,45 @@ function populateProfileForm(p) {
   set('pf-collection_contact_name', p.collection_contact_name);
   set('pf-collection_contact_phone', p.collection_contact_phone);
   set('pf-collection_contact_email', p.collection_contact_email);
+
+  // Collection point type radio + show/hide. Default 'both' if the
+  // server hasn't told us yet (the migration backfills 'both' too).
+  const type = p.collection_point_type || 'both';
+  document.querySelectorAll('input[name="collection_point_type"]').forEach((r) => {
+    r.checked = r.value === type;
+  });
+  applyCollectionPointTypeUI(type);
 }
+
+function applyCollectionPointTypeUI(type) {
+  const lockerSection = document.getElementById('pf-section-locker');
+  const doorSection = document.getElementById('pf-section-door');
+  if (lockerSection) lockerSection.classList.toggle('hidden', type === 'door');
+  if (doorSection) doorSection.classList.toggle('hidden', type === 'locker');
+}
+
+// Wire the type radio once on first activation of the Profile tab —
+// because the form is in the DOM from page load we can attach
+// listeners as soon as the script runs. Use event delegation so we
+// don't need to track whether listeners are bound.
+document.addEventListener('change', (ev) => {
+  const target = ev.target;
+  if (target && target.name === 'collection_point_type') {
+    applyCollectionPointTypeUI(target.value);
+  }
+});
 
 function readProfileForm() {
   const get = (id) => {
     const v = (document.getElementById(id).value || '').trim();
     return v.length ? v : null;
   };
+  const typeRadio = document.querySelector('input[name="collection_point_type"]:checked');
+  const collection_point_type = typeRadio ? typeRadio.value : 'both';
+
   // Door address: pack into one object only if at least one field is set,
-  // otherwise send null so the column is cleared.
+  // otherwise send null so the column is cleared. Locker-only packers
+  // don't need the address; the server clears it when it sees the type.
   const addr = {
     street: get('pf-addr-street'),
     suburb: get('pf-addr-suburb'),
@@ -577,17 +637,32 @@ function readProfileForm() {
     country: get('pf-addr-country'),
   };
   const anyAddr = Object.values(addr).some((v) => v != null);
-  return {
+
+  const body = {
     full_name: get('pf-full_name'),
     business_name: get('pf-business_name'),
     phone: get('pf-phone'),
-    collection_terminal_id: get('pf-collection_terminal_id'),
-    collection_locker_name: get('pf-collection_locker_name'),
-    collection_door_address: anyAddr ? addr : null,
+    collection_point_type,
     collection_contact_name: get('pf-collection_contact_name'),
     collection_contact_phone: get('pf-collection_contact_phone'),
     collection_contact_email: get('pf-collection_contact_email'),
   };
+  // Only send the locker fields when the type allows it. The server
+  // also clears them server-side when type='door', so this is just
+  // a bandwidth optimisation, but it makes the audit log cleaner.
+  if (collection_point_type !== 'door') {
+    body.collection_terminal_id = get('pf-collection_terminal_id');
+    body.collection_locker_name = get('pf-collection_locker_name');
+  } else {
+    body.collection_terminal_id = null;
+    body.collection_locker_name = null;
+  }
+  if (collection_point_type !== 'locker') {
+    body.collection_door_address = anyAddr ? addr : null;
+  } else {
+    body.collection_door_address = null;
+  }
+  return body;
 }
 
 document.addEventListener('submit', async (ev) => {
@@ -674,6 +749,7 @@ function switchTab(tab) {
   if (tab === 'packing') renderPacking();
   if (tab === 'manual-upload') renderManualUpload();
   if (tab === 'collections') renderCollections();
+  if (tab === 'profile') loadMyRatings();
 
   // Auto-close drawer on mobile when navigating
   if (window.innerWidth < 768) closeDrawer();
@@ -1270,6 +1346,48 @@ async function confirmCollection(orderId) {
   const { data } = await packerApi('POST', '/packer-auth/collection-queue/' + encodeURIComponent(orderId) + '/confirm', {});
   if (data.success) { toast('Collection confirmed', 'success'); renderCollections(); }
   else toast(data.error?.message || 'Failed', 'error');
+}
+
+// ---- My ratings (aggregate-only view for the packer) ----
+
+async function loadMyRatings() {
+  const card = document.getElementById('pf-ratings-card');
+  if (!card) return;
+  const { data } = await packerApi('GET', '/packer-auth/ratings');
+  if (!data.success) {
+    card.classList.add('hidden');
+    return;
+  }
+  const r = data.data;
+  if (!r.count) {
+    // Hide the card entirely until at least one rating exists; it
+    // saves the packer from staring at four em-dashes on day one.
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  document.getElementById('pf-rating-overall').textContent =
+    (r.overall != null ? r.overall.toFixed(2) : '\u2014') + ' / 5';
+  document.getElementById('pf-rating-count').textContent =
+    r.count + ' rating' + (r.count === 1 ? '' : 's');
+  const rows = [
+    ['Packing quality', r.packing_quality],
+    ['Speed', r.speed],
+    ['Communication', r.communication],
+    ['Reliability', r.reliability],
+  ];
+  document.getElementById('pf-rating-breakdown').innerHTML = rows.map(function (entry) {
+    const label = entry[0]; const v = entry[1];
+    const pct = v != null ? Math.max(0, Math.min(100, (v / 5) * 100)) : 0;
+    const display = v != null ? v.toFixed(2) : '\u2014';
+    return '<div class="bg-surface-100 rounded-2xl p-4">' +
+      '<div class="flex items-baseline justify-between mb-2">' +
+        '<div class="text-xs uppercase tracking-wide font-semibold text-gray-600">' + escapeHtml(label) + '</div>' +
+        '<div class="text-sm font-bold">' + display + '</div>' +
+      '</div>' +
+      '<div class="h-2 bg-white rounded-full overflow-hidden"><div class="h-full bg-brand-400" style="width:' + pct + '%"></div></div>' +
+      '</div>';
+  }).join('');
 }
 
 // Mobile drawer

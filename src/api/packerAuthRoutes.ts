@@ -244,6 +244,7 @@ router.get('/me', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, 
 
   const packer = await db('packers').where({ id: packerId }).first(
     'id', 'email', 'full_name', 'business_name', 'phone',
+    'collection_point_type',
     'collection_terminal_id', 'collection_locker_name', 'collection_door_address',
     'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
     'status', 'created_at', 'last_login_at',
@@ -300,10 +301,13 @@ router.get('/me', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, 
  */
 const ALLOWED_PROFILE_FIELDS = [
   'full_name', 'business_name', 'phone',
+  'collection_point_type',
   'collection_terminal_id', 'collection_locker_name',
   'collection_door_address',
   'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
 ];
+
+const VALID_COLLECTION_TYPES = ['locker', 'door', 'both'];
 
 router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
   const db = getDb();
@@ -312,6 +316,30 @@ router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
   for (const k of ALLOWED_PROFILE_FIELDS) {
     if (req.body && k in req.body) {
       update[k] = req.body[k] === '' ? null : req.body[k];
+    }
+  }
+
+  // Validate collection_point_type — required to be one of the
+  // enumerated strings if provided. Reject anything else loud and
+  // early so the UI can surface the error instead of silently
+  // writing garbage that the assigner would later filter out.
+  if (update.collection_point_type !== undefined && update.collection_point_type !== null) {
+    if (!VALID_COLLECTION_TYPES.includes(update.collection_point_type)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_TYPE', message: `collection_point_type must be one of: ${VALID_COLLECTION_TYPES.join(', ')}` },
+      });
+    }
+
+    // When the packer narrows their type, clear the unused fields so
+    // the assigner doesn't pick a stale terminal_id for a door-only
+    // packer or vice versa.
+    if (update.collection_point_type === 'locker') {
+      update.collection_door_address = null;
+    }
+    if (update.collection_point_type === 'door') {
+      update.collection_terminal_id = null;
+      update.collection_locker_name = null;
     }
   }
 
@@ -332,6 +360,7 @@ router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
     .update(update)
     .returning([
       'id', 'email', 'full_name', 'business_name', 'phone',
+      'collection_point_type',
       'collection_terminal_id', 'collection_locker_name', 'collection_door_address',
       'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
       'status',
@@ -853,6 +882,66 @@ router.post('/collection-queue/:id/confirm', packerAuthMiddleware, async (req: P
 
   log.info({ packerId, orderId: id }, 'Packer confirmed collection');
   return res.status(200).json({ success: true, data: { message: 'Collection confirmed' } });
+});
+
+// ---------------------------------------------------------------------------
+// GET /packer-auth/ratings
+// ---------------------------------------------------------------------------
+
+/**
+ * Aggregate-only view of the ratings tenants have left on this
+ * packer. We deliberately don't expose individual rows or comments
+ * here — packers see four numeric averages plus a count. Per-tenant
+ * detail and comments stay tenant-side via /packers/:id/ratings.
+ *
+ * Shape:
+ *   {
+ *     count: number,
+ *     overall: number | null,             // average of the four criteria
+ *     packing_quality: number | null,
+ *     speed: number | null,
+ *     communication: number | null,
+ *     reliability: number | null,
+ *     last_rated_at: ISO string | null,
+ *   }
+ */
+router.get('/ratings', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+
+  const row = await db('packer_ratings')
+    .where({ packer_id: packerId })
+    .select(
+      db.raw('COUNT(*)::int as count'),
+      db.raw('AVG(packing_quality)::float as packing_quality'),
+      db.raw('AVG(speed)::float as speed'),
+      db.raw('AVG(communication)::float as communication'),
+      db.raw('AVG(reliability)::float as reliability'),
+      db.raw('MAX(updated_at) as last_rated_at'),
+    )
+    .first();
+
+  const count = Number((row as any)?.count || 0);
+  const round2 = (v: any) => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
+  const pq = round2((row as any)?.packing_quality);
+  const sp = round2((row as any)?.speed);
+  const co = round2((row as any)?.communication);
+  const rl = round2((row as any)?.reliability);
+  const present = [pq, sp, co, rl].filter((v) => v !== null) as number[];
+  const overall = present.length ? Math.round((present.reduce((a, b) => a + b, 0) / present.length) * 100) / 100 : null;
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      count,
+      overall,
+      packing_quality: pq,
+      speed: sp,
+      communication: co,
+      reliability: rl,
+      last_rated_at: (row as any)?.last_rated_at || null,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------

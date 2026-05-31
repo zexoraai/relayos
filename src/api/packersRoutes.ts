@@ -47,10 +47,50 @@ router.get('/links', requirePermission('packers.view'), async (req: Authenticate
       'l.linked_at', 'l.paused_at', 'l.unlinked_at', 'l.unlink_reason',
       'p.id as packer_id', 'p.email as packer_email', 'p.full_name as packer_name',
       'p.business_name as packer_business_name', 'p.phone as packer_phone',
+      'p.collection_point_type',
       'p.collection_terminal_id', 'p.collection_locker_name',
       'p.collection_door_address',
       'p.status as packer_status',
     );
+
+  // Aggregate ratings per packer: cross-tenant average so every
+  // tenant sees the same global score, plus a count. Computed in a
+  // single grouped query keyed by packer_id.
+  const packerIds = links.map((l: any) => l.packer_id).filter(Boolean);
+  const ratingRows = packerIds.length
+    ? await db('packer_ratings')
+        .whereIn('packer_id', packerIds)
+        .groupBy('packer_id')
+        .select(
+          'packer_id',
+          db.raw('COUNT(*)::int as count'),
+          db.raw('AVG(packing_quality)::float as packing_quality'),
+          db.raw('AVG(speed)::float as speed'),
+          db.raw('AVG(communication)::float as communication'),
+          db.raw('AVG(reliability)::float as reliability'),
+        )
+    : [];
+  const round2 = (v: any) => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
+  const ratingByPacker: Record<string, any> = {};
+  for (const r of ratingRows as any[]) {
+    const pq = round2(r.packing_quality);
+    const sp = round2(r.speed);
+    const co = round2(r.communication);
+    const rl = round2(r.reliability);
+    const present = [pq, sp, co, rl].filter((v) => v !== null) as number[];
+    const overall = present.length ? Math.round((present.reduce((a, b) => a + b, 0) / present.length) * 100) / 100 : null;
+    ratingByPacker[r.packer_id] = {
+      count: Number(r.count) || 0,
+      overall,
+      packing_quality: pq,
+      speed: sp,
+      communication: co,
+      reliability: rl,
+    };
+  }
+  for (const l of links as any[]) {
+    l.rating = l.packer_id ? (ratingByPacker[l.packer_id] || null) : null;
+  }
 
   const invites = await db('packer_invites')
     .where({ tenant_id: tenantId })
@@ -285,6 +325,198 @@ router.put('/settings', requirePermission('packers.manage'), async (req: Authent
 
   log.info({ tenantId, packer_assignment_mode, by: req.tenant?.email }, 'Packer assignment mode updated');
   return res.status(200).json({ success: true, data: { packer_assignment_mode } });
+});
+
+// ---------------------------------------------------------------------------
+// POST /packers/ratings — submit / update a rating for a packer
+// ---------------------------------------------------------------------------
+
+/**
+ * Body: {
+ *   packer_id: uuid,
+ *   order_id:  uuid,
+ *   packing_quality: 1..5,
+ *   speed: 1..5,
+ *   communication: 1..5,
+ *   reliability: 1..5,
+ *   comment?: string (max 2000)
+ * }
+ *
+ * Constraints (enforced server-side):
+ *   - The order must belong to this tenant AND must already be
+ *     dropped_off (or `delivered` for collection orders) — we don't
+ *     accept ratings on in-flight work.
+ *   - The order must have been assigned to the given packer
+ *     (assigned_packer_id matches). Without that match, the tenant
+ *     can't legitimately rate someone else's work.
+ *   - Re-rating the same (packer, order) pair updates the existing
+ *     row instead of inserting a duplicate (the unique key on the
+ *     table guarantees it; we use ON CONFLICT MERGE for clarity).
+ */
+const RATING_FIELDS = ['packing_quality', 'speed', 'communication', 'reliability'] as const;
+const COMMENT_MAX_LEN = 2000;
+
+router.post('/ratings', requirePermission('packers.rate'), async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const userId = req.tenant!.userId;
+  const body = req.body || {};
+
+  const packerId = String(body.packer_id || '').trim();
+  const orderId = String(body.order_id || '').trim();
+  if (!packerId || !orderId) {
+    return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'packer_id and order_id are required' } });
+  }
+
+  // Coerce + validate score fields
+  const scores: Record<string, number> = {};
+  for (const f of RATING_FIELDS) {
+    const n = parseInt(String(body[f]), 10);
+    if (!Number.isFinite(n) || n < 1 || n > 5) {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_SCORE', message: `${f} must be an integer 1..5` } });
+    }
+    scores[f] = n;
+  }
+  const comment = body.comment === undefined || body.comment === null
+    ? null
+    : String(body.comment).slice(0, COMMENT_MAX_LEN);
+
+  // Enforce tenant ownership + packer assignment + completion
+  const order = await db('orders')
+    .where({ id: orderId, tenant_id: tenantId })
+    .first('id', 'assigned_packer_id', 'packing_status', 'status', 'routing_status');
+  if (!order) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found' } });
+  }
+  if (order.assigned_packer_id !== packerId) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NOT_ASSIGNED', message: 'This order was not handled by the packer you are rating' },
+    });
+  }
+  // Allow rating once the parcel has visibly left the packer's hands.
+  // Packing-flow orders: dropped_off. Collection orders end at
+  // status='delivered' once the customer collects.
+  const isComplete = order.packing_status === 'dropped_off' || order.status === 'delivered';
+  if (!isComplete) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NOT_READY', message: 'You can rate this order once it is dropped off (or collected)' },
+    });
+  }
+
+  // Upsert by the unique (tenant, packer, order) tuple. Using
+  // onConflict().merge() keeps the original created_at and only
+  // bumps the scores + updated_at.
+  const [row] = await db('packer_ratings')
+    .insert({
+      tenant_id: tenantId,
+      packer_id: packerId,
+      order_id: orderId,
+      rated_by_user_id: userId || null,
+      ...scores,
+      comment,
+    })
+    .onConflict(['tenant_id', 'packer_id', 'order_id'])
+    .merge({ ...scores, comment, updated_at: new Date() })
+    .returning(['id', 'created_at', 'updated_at']);
+
+  log.info({ tenantId, packerId, orderId, by: req.tenant?.email }, 'Packer rating saved');
+  return res.status(200).json({
+    success: true,
+    data: {
+      id: row.id,
+      packer_id: packerId,
+      order_id: orderId,
+      ...scores,
+      comment,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /packers/:packerId/ratings — tenant's own rating history + aggregates
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns:
+ *   {
+ *     aggregate: {                  // cross-tenant average (everyone sees the same)
+ *       count, overall, packing_quality, speed, communication, reliability,
+ *     },
+ *     mine: [                       // this tenant's own rows only
+ *       { id, order_id, order_number?, packing_quality, ..., comment, created_at, updated_at }
+ *     ]
+ *   }
+ *
+ * The packer's identity gates this — we only return data for a
+ * packer the calling tenant is actually linked to (active, paused,
+ * left, kicked — any non-pending link counts so historical ratings
+ * stay visible after a kick).
+ */
+router.get('/:packerId/ratings', requirePermission('packers.view'), async (req: AuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const tenantId = req.tenant!.tenantId;
+  const packerId = req.params.packerId as string;
+
+  // Authorisation: caller must have at least one link to this packer
+  // (active or historical) — this prevents browsing ratings for
+  // arbitrary packer ids by enumerating UUIDs.
+  const link = await db('packer_tenant_links')
+    .where({ tenant_id: tenantId, packer_id: packerId })
+    .first('id');
+  if (!link) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Packer not linked to your tenant' } });
+  }
+
+  // Cross-tenant aggregate
+  const agg = await db('packer_ratings')
+    .where({ packer_id: packerId })
+    .select(
+      db.raw('COUNT(*)::int as count'),
+      db.raw('AVG(packing_quality)::float as packing_quality'),
+      db.raw('AVG(speed)::float as speed'),
+      db.raw('AVG(communication)::float as communication'),
+      db.raw('AVG(reliability)::float as reliability'),
+    )
+    .first();
+  const round2 = (v: any) => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
+  const pq = round2((agg as any)?.packing_quality);
+  const sp = round2((agg as any)?.speed);
+  const co = round2((agg as any)?.communication);
+  const rl = round2((agg as any)?.reliability);
+  const present = [pq, sp, co, rl].filter((v) => v !== null) as number[];
+  const overall = present.length ? Math.round((present.reduce((a, b) => a + b, 0) / present.length) * 100) / 100 : null;
+
+  // This tenant's own rows, joined to orders so the UI can label by
+  // human-readable order_number.
+  const mine = await db('packer_ratings as r')
+    .leftJoin('orders as o', 'o.id', 'r.order_id')
+    .where('r.tenant_id', tenantId)
+    .andWhere('r.packer_id', packerId)
+    .orderBy('r.updated_at', 'desc')
+    .select(
+      'r.id', 'r.order_id', 'o.order_number',
+      'r.packing_quality', 'r.speed', 'r.communication', 'r.reliability',
+      'r.comment', 'r.created_at', 'r.updated_at',
+    );
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      aggregate: {
+        count: Number((agg as any)?.count || 0),
+        overall,
+        packing_quality: pq,
+        speed: sp,
+        communication: co,
+        reliability: rl,
+      },
+      mine,
+    },
+  });
 });
 
 export default router;
