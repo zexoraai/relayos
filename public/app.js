@@ -5009,9 +5009,27 @@ async function renderPackers() {
       const eff = nominal === 0 ? 0 : Math.max(nominal * ratingForCalc / 4.0, nominal * 0.25);
       const effDisplay = eff.toFixed(2);
       const showEff = nominal > 0 && Math.abs(eff - nominal) > 0.01;
-      html += `<td class="px-5 py-3"><div class="font-mono text-sm">${nominal}</div>` +
-        (showEff ? `<div class="text-[11px] text-gray-400">eff. ${effDisplay}</div>` : '') +
-        `</td>`;
+      // Tooltip + quick-bump appear only when the rating is dragging
+      // the effective weight noticeably below the nominal — that's
+      // when the operator might want to compensate.
+      const isUnderscored = showEff && eff < nominal;
+      const tipText = `Effective weight = nominal × rating ÷ 4. ` +
+        (r && r.count ? `Cross-tenant overall is ${(r.overall ?? 0).toFixed(2)}.` : `No ratings yet — treated as neutral 4.0.`);
+      let weightCell = `<div class="flex items-center gap-1.5">` +
+        `<span class="font-mono text-sm">${nominal}</span>`;
+      if (isUnderscored) {
+        weightCell += `<span class="text-[11px] text-gray-400" title="${escapeHtml(tipText)}">&#9432;</span>`;
+        if (canManage && nominal < 10) {
+          weightCell += `<button onclick="bumpPackerWeight('${l.id}', ${nominal + 1})" class="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700 hover:bg-brand-100 font-semibold" title="Bump load weight to ${nominal + 1} to compensate">+1</button>`;
+        }
+      }
+      weightCell += `</div>`;
+      if (showEff) {
+        const arrow = eff < nominal ? '\u25BC' : '\u25B2';
+        const arrowCls = eff < nominal ? 'text-amber-600' : 'text-green-600';
+        weightCell += `<div class="text-[11px] text-gray-400">eff. ${effDisplay} <span class="${arrowCls}">${arrow}</span></div>`;
+      }
+      html += `<td class="px-5 py-3">${weightCell}</td>`;
       html += `<td class="px-5 py-3">${coll}</td>`;
       html += `<td class="px-5 py-3"><div class="text-sm font-semibold">${l.orders_assigned_count ?? 0}</div><div class="text-xs text-gray-400">Last: ${lastAssigned}</div></td>`;
       html += `<td class="px-5 py-3 text-xs text-gray-500">${linkedAt}</td>`;
@@ -5200,6 +5218,23 @@ async function submitEditPackerLink(id) {
     renderPackers();
   } else {
     toast(data?.error?.message || 'Failed', 'error');
+  }
+}
+
+/**
+ * One-click load-weight bump from the Packers table. Used to
+ * compensate when a packer's effective weight is being dragged
+ * below their nominal weight by a low cross-tenant rating, and the
+ * tenant wants to keep them in the rotation regardless.
+ */
+async function bumpPackerWeight(linkId, newWeight) {
+  const clamped = Math.max(1, Math.min(10, newWeight));
+  const { data } = await api('PUT', `/packers/links/${linkId}`, { load_weight: clamped });
+  if (data && data.success) {
+    toast(`Load weight bumped to ${clamped}`, 'success');
+    renderPackers();
+  } else {
+    toast(data?.error?.message || 'Failed to bump weight', 'error');
   }
 }
 

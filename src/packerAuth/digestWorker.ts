@@ -54,13 +54,46 @@ export function stopPackerDigestWorker(): void {
  * within DIGEST_HOUR_LOCAL .. DIGEST_HOUR_LOCAL+DIGEST_WINDOW_HOURS,
  * AND last_digest_sent_at is older than MIN_DAYS_BETWEEN days.
  *
+ * Multi-process safety: wraps the body in a Postgres advisory lock
+ * (key DIGEST_ADVISORY_LOCK_KEY) so if more than one workers
+ * process is running, only one of them runs the tick at a time.
+ * Without the lock both processes would race on the SELECT and
+ * fire two digests for every opted-in packer. The lock auto-
+ * releases when the connection returns to the pool — no manual
+ * unlock needed.
+ *
  * Exposed for tests so we can drive the time-of-day check
  * deterministically by passing in `now`.
  */
+const DIGEST_ADVISORY_LOCK_KEY = 8472615301; // arbitrary 64-bit signed int unique to this worker
+
 export async function tick(now: Date = new Date()): Promise<void> {
   if (!isWithinDigestWindow(now)) {
     return;
   }
+  const db = getDb();
+
+  // Try to grab the advisory lock. pg_try_advisory_lock returns true
+  // if we got it, false otherwise. If another process holds it, we
+  // skip this tick — the holder will do the work.
+  const lockRes = await db.raw('SELECT pg_try_advisory_lock(?) AS got', [DIGEST_ADVISORY_LOCK_KEY]);
+  const got = !!(lockRes?.rows?.[0]?.got);
+  if (!got) {
+    log.debug('Digest tick skipped — another worker holds the advisory lock');
+    return;
+  }
+
+  try {
+    await runDigestPass(now);
+  } finally {
+    // Always release. If the connection has already gone back to the
+    // pool the unlock is a no-op; calling it explicitly is the safe
+    // pattern for our connection style.
+    await db.raw('SELECT pg_advisory_unlock(?)', [DIGEST_ADVISORY_LOCK_KEY]).catch(() => {});
+  }
+}
+
+async function runDigestPass(now: Date): Promise<void> {
   const db = getDb();
 
   const cutoff = new Date(now.getTime() - MIN_DAYS_BETWEEN * 86400000);
