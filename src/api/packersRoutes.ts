@@ -120,27 +120,33 @@ router.get('/links', requirePermission('packers.view'), async (req: Authenticate
 
 /**
  * Create an invite link. Body:
- *   { email, load_weight? (default 1), note? }
+ *   { email, phone? (E.164), load_weight? (default 1), note? }
  *
- * Returns the invite row including the accept_url. In production the
- * accept_url is also emailed to the packer; for now (no email service
- * wired up) the tenant copies it from the response and shares it
- * manually.
+ * Returns the invite row including the accept_url and a sent_via
+ * array describing which delivery channels actually fired (today
+ * only 'whatsapp' is wired; we still return the accept_url so the
+ * operator can copy/paste as a fallback).
  *
  * Idempotency: re-inviting the same email while a pending invite
- * exists revokes the old one and mints a fresh token. This keeps the
- * UX clean — the tenant doesn't have to chase down stale tokens.
+ * exists revokes the old one and mints a fresh token. This keeps
+ * the UX clean — the tenant doesn't have to chase down stale tokens.
+ *
+ * WhatsApp delivery uses sendFreeText which respects the 24h
+ * customer-service window. If the packer's number isn't currently
+ * in a window, the send will fail and the response carries an
+ * `whatsapp_error` field; the operator still gets the link to copy.
  */
 router.post('/invites', requirePermission('packers.invite'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
   const inviterUserId = req.tenant!.userId;
-  const { email: emailRaw, load_weight: loadWeightRaw, note } = req.body || {};
+  const { email: emailRaw, phone: phoneRaw, load_weight: loadWeightRaw, note } = req.body || {};
 
   const email = String(emailRaw || '').toLowerCase().trim();
   if (!email || !email.includes('@')) {
     return res.status(400).json({ success: false, error: { code: 'INVALID_EMAIL', message: 'A valid email is required' } });
   }
+  const phone = phoneRaw ? String(phoneRaw).trim() : null;
   const loadWeight = Math.max(1, Math.min(10, parseInt(String(loadWeightRaw ?? '1'), 10) || 1));
 
   // Refuse if a packer with this email is already actively linked.
@@ -180,10 +186,53 @@ router.post('/invites', requirePermission('packers.invite'), async (req: Authent
   // invite accepted.
   const accept_url = `/packer-signup?token=${encodeURIComponent(token)}`;
 
-  log.info({ tenantId, email, by: req.tenant?.email, loadWeight }, 'Packer invite created');
+  // Delivery channel: WhatsApp when a phone is supplied. The operator
+  // always gets the accept_url back regardless so they can re-share
+  // it manually if WhatsApp delivery falls outside the 24h window or
+  // the tenant hasn't configured WhatsApp at all.
+  const sent_via: string[] = [];
+  let whatsapp_error: string | null = null;
+
+  if (phone) {
+    try {
+      // Resolve a public origin for the link. Prefer PUBLIC_BASE_URL
+      // (set in Railway env) so we never send a localhost link;
+      // fall back to constructing it from the request when running
+      // outside production.
+      const baseUrl = process.env.PUBLIC_BASE_URL
+        || `${req.protocol}://${req.get('host')}`;
+      const fullUrl = baseUrl.replace(/\/$/, '') + accept_url;
+
+      const tenant = await db('tenants').where({ id: tenantId }).first('email');
+      const tenantLabel = tenant?.email ? `the team at ${tenant.email}` : 'a RelayOS tenant';
+      const body = [
+        `Hi! ${tenantLabel} has invited you to join their packer roster on RelayOS.`,
+        ``,
+        `Tap to accept and finish setup:`,
+        fullUrl,
+        ``,
+        note ? `Note from the team: ${note}` : null,
+        `This invite expires ${expiresAt.toDateString()}.`,
+      ].filter(Boolean).join('\n');
+
+      const { sendFreeText } = await import('../whatsapp');
+      const r = await sendFreeText({ tenantId, toPhone: phone, body });
+      if (r.sent) sent_via.push('whatsapp');
+      else whatsapp_error = r.error || r.skipped_reason || 'WhatsApp send did not succeed';
+    } catch (err: any) {
+      whatsapp_error = err?.message || 'WhatsApp dispatch failed';
+      log.warn({ tenantId, email, phone, error: whatsapp_error }, 'Packer invite WhatsApp dispatch failed');
+    }
+  }
+
+  log.info({ tenantId, email, phone, by: req.tenant?.email, loadWeight, sent_via }, 'Packer invite created');
   return res.status(201).json({
     success: true,
-    data: { email, load_weight: loadWeight, expires_at: expiresAt, accept_url, token },
+    data: {
+      email, phone, load_weight: loadWeight, expires_at: expiresAt,
+      accept_url, token,
+      sent_via, whatsapp_error,
+    },
   });
 });
 

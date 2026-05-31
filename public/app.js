@@ -5147,6 +5147,11 @@ function showPackerInviteModal() {
         <p class="text-xs text-gray-400 mt-1">They'll get a link to create their packer account and accept the invite.</p>
       </div>
       <div>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">WhatsApp phone <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
+        <input id="pinv-phone" type="tel" placeholder="+27..." class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
+        <p class="text-xs text-gray-400 mt-1">When provided, we'll WhatsApp the invite link directly.</p>
+      </div>
+      <div>
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Load weight</label>
         <input id="pinv-weight" type="number" min="1" max="10" value="1" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
         <p class="text-xs text-gray-400 mt-1">1 = standard share, higher = bigger share of orders. Range 1–10.</p>
@@ -5162,24 +5167,42 @@ function showPackerInviteModal() {
 
 async function submitPackerInvite() {
   const email = (document.getElementById('pinv-email').value || '').trim();
+  const phone = (document.getElementById('pinv-phone').value || '').trim();
   const weight = parseInt(document.getElementById('pinv-weight').value || '1', 10) || 1;
   const note = (document.getElementById('pinv-note').value || '').trim();
   if (!email || !email.includes('@')) { toast('Valid email required', 'error'); return; }
-  const { data } = await api('POST', '/packers/invites', { email, load_weight: weight, note: note || undefined });
+  const reqBody = { email, load_weight: weight };
+  if (phone) reqBody.phone = phone;
+  if (note) reqBody.note = note;
+  const { data } = await api('POST', '/packers/invites', reqBody);
   if (!data || !data.success) {
     toast(data?.error?.message || 'Failed to invite', 'error');
     return;
   }
   closeModal();
-  // Show the accept URL so the operator can copy/paste it (no email service yet).
+
   const fullUrl = window.location.origin + (data.data.accept_url || '');
+  const sentVia = Array.isArray(data.data.sent_via) ? data.data.sent_via : [];
+  const wppOk = sentVia.includes('whatsapp');
+  const wppErr = data.data.whatsapp_error;
+
+  let banner = '';
+  if (phone && wppOk) {
+    banner = `<div class="bg-green-50 text-green-700 rounded-xl px-3 py-2 text-xs">Sent via WhatsApp to <strong>${escapeHtml(phone)}</strong>.</div>`;
+  } else if (phone && wppErr) {
+    banner = `<div class="bg-amber-50 text-amber-700 rounded-xl px-3 py-2 text-xs">WhatsApp send did not go through (${escapeHtml(wppErr)}). Share the link manually below.</div>`;
+  } else {
+    banner = `<div class="bg-surface-100 text-gray-600 rounded-xl px-3 py-2 text-xs">Send this link to the packer to accept:</div>`;
+  }
+
   const body = `
     <div class="space-y-3">
-      <p class="text-sm text-gray-700">Invite created for <strong>${escapeHtml(email)}</strong>. Send this link to the packer:</p>
+      ${banner}
+      <p class="text-sm text-gray-700">Invite for <strong>${escapeHtml(email)}</strong>${phone ? ' / ' + escapeHtml(phone) : ''}.</p>
       <div class="bg-surface-100 rounded-xl p-3 font-mono text-xs break-all">${escapeHtml(fullUrl)}</div>
-      <button onclick="copyPackerInviteLink('${escapeHtml(fullUrl)}'); closeModal();" class="w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Copy link & close</button>
+      <button onclick="copyPackerInviteLink('${escapeHtml(fullUrl)}'); closeModal();" class="w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Copy link &amp; close</button>
     </div>`;
-  openModal('Invite link', body);
+  openModal('Invite created', body);
   renderPackers();
 }
 
