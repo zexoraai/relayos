@@ -1388,6 +1388,55 @@ async function loadMyRatings() {
       '<div class="h-2 bg-white rounded-full overflow-hidden"><div class="h-full bg-brand-400" style="width:' + pct + '%"></div></div>' +
       '</div>';
   }).join('');
+
+  // 5-week sparkline trend (server returns up to 5 buckets, oldest
+  // first). We render an inline SVG so the dashboard doesn't need a
+  // chart library. Each bucket is a labelled bar; missing weeks
+  // render as a thin baseline so the gap is visible. The container
+  // is appended/replaced under the breakdown grid each load.
+  let trendEl = document.getElementById('pf-rating-trend');
+  if (!trendEl) {
+    trendEl = document.createElement('div');
+    trendEl.id = 'pf-rating-trend';
+    trendEl.className = 'mt-5';
+    document.getElementById('pf-rating-breakdown').parentNode.appendChild(trendEl);
+  }
+  const buckets = Array.isArray(r.trend) ? r.trend : [];
+  const present = buckets.filter(function (b) { return b.count > 0; });
+  if (!buckets.length || present.length === 0) {
+    trendEl.innerHTML = '';
+  } else {
+    const width = 100; // %, fluid
+    const heightPx = 64;
+    const barHeights = buckets.map(function (b) {
+      // Map 0..5 → 0..heightPx, with a minimum of 2px so empty
+      // buckets still register as a thin baseline.
+      if (b.overall == null) return 2;
+      return Math.max(2, Math.round((b.overall / 5) * heightPx));
+    });
+    const labels = buckets.map(function (b) {
+      const d = new Date(b.to);
+      return d.toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' });
+    });
+    let trendHtml = '<div class="flex items-baseline justify-between mb-2">' +
+      '<div class="text-xs uppercase tracking-wide font-semibold text-gray-600">5-week trend</div>' +
+      '<div class="text-[11px] text-gray-400">overall score per week</div>' +
+      '</div>';
+    trendHtml += '<div class="flex items-end gap-2 ' + (heightPx === 64 ? 'h-16' : '') + '">';
+    for (let i = 0; i < buckets.length; i++) {
+      const h = barHeights[i];
+      const bucket = buckets[i];
+      const label = bucket.overall != null ? bucket.overall.toFixed(2) : '\u2014';
+      const titleAttr = labels[i] + ' \u2014 ' + label + (bucket.count ? ' (' + bucket.count + ')' : '');
+      trendHtml += '<div class="flex-1 flex flex-col items-center gap-1" title="' + escapeHtml(titleAttr) + '">' +
+        '<div class="text-[10px] font-semibold text-gray-700">' + label + '</div>' +
+        '<div style="height:' + h + 'px;width:100%;" class="bg-brand-400 rounded-t"></div>' +
+        '<div class="text-[10px] text-gray-400">' + escapeHtml(labels[i]) + '</div>' +
+      '</div>';
+    }
+    trendHtml += '</div>';
+    trendEl.innerHTML = trendHtml;
+  }
 }
 
 // Mobile drawer

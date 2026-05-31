@@ -930,6 +930,47 @@ router.get('/ratings', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
   const present = [pq, sp, co, rl].filter((v) => v !== null) as number[];
   const overall = present.length ? Math.round((present.reduce((a, b) => a + b, 0) / present.length) * 100) / 100 : null;
 
+  // 30-day trend by ISO week, packed as up to 5 buckets so the
+  // dashboard can chart a sparkline. Each bucket carries the
+  // average overall plus the count of ratings in that bucket. We
+  // bucket by date range rather than calendar week to keep the
+  // chart smooth across week boundaries.
+  const TREND_BUCKET_DAYS = 7;
+  const TREND_BUCKETS = 5; // ~5 weeks
+  const buckets: Array<{ from: string; to: string; count: number; overall: number | null }> = [];
+  const now = Date.now();
+  for (let i = TREND_BUCKETS - 1; i >= 0; i--) {
+    const to = new Date(now - i * TREND_BUCKET_DAYS * 86400000);
+    const from = new Date(to.getTime() - TREND_BUCKET_DAYS * 86400000);
+    const bucketRow = await db('packer_ratings')
+      .where({ packer_id: packerId })
+      .where('updated_at', '>=', from)
+      .where('updated_at', '<', to)
+      .select(
+        db.raw('COUNT(*)::int as count'),
+        db.raw('AVG(packing_quality)::float as pq'),
+        db.raw('AVG(speed)::float as sp'),
+        db.raw('AVG(communication)::float as co'),
+        db.raw('AVG(reliability)::float as rl'),
+      )
+      .first();
+    const c = Number((bucketRow as any)?.count || 0);
+    let bucketOverall: number | null = null;
+    if (c > 0) {
+      const avgs = [
+        (bucketRow as any).pq, (bucketRow as any).sp,
+        (bucketRow as any).co, (bucketRow as any).rl,
+      ].map((v) => v === null || v === undefined ? null : Number(v)).filter((v): v is number => v !== null);
+      bucketOverall = avgs.length ? Math.round((avgs.reduce((a, b) => a + b, 0) / avgs.length) * 100) / 100 : null;
+    }
+    buckets.push({
+      from: from.toISOString(),
+      to: to.toISOString(),
+      count: c,
+      overall: bucketOverall,
+    });
+  }
+
   return res.status(200).json({
     success: true,
     data: {
@@ -940,6 +981,7 @@ router.get('/ratings', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
       communication: co,
       reliability: rl,
       last_rated_at: (row as any)?.last_rated_at || null,
+      trend: buckets,
     },
   });
 });
