@@ -4944,7 +4944,31 @@ async function renderPackers() {
   html += `</div>`;
   if (filteredLinks.length === 0) {
     if (links.length === 0) {
-      html += emptyState('No linked packers yet', canInvite ? 'Click "Invite Packer" to send your first invite.' : 'No active packer relationships for this tenant.');
+      // First-run onboarding — explain how the assignment loop works
+      // before throwing the operator at an empty table.
+      html += `<div class="px-5 py-8">`;
+      html += `<div class="text-center max-w-xl mx-auto mb-6">`;
+      html += `<h4 class="text-base font-semibold mb-1">No packers yet</h4>`;
+      html += `<p class="text-sm text-gray-500">Independent packers receive orders the assigner picks for them and pack from their own collection point. Here's how the loop works once you invite one:</p>`;
+      html += `</div>`;
+      html += `<ol class="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl mx-auto">`;
+      const steps = [
+        { n: 1, title: 'You invite', body: 'Send an invite by email. The packer signs up (or logs in) and accepts. The link goes active immediately.' },
+        { n: 2, title: 'Order arrives', body: 'When a new order matches your assignment mode, the assigner picks the lowest-load active packer with a configured collection point.' },
+        { n: 3, title: 'Packer ships', body: 'The packer marks orders packed and dropped off from their own dashboard. Tracking flows back through fulfillment as usual.' },
+      ];
+      steps.forEach((s) => {
+        html += `<li class="bg-surface-100 rounded-2xl p-4">`;
+        html += `<div class="w-7 h-7 rounded-full bg-brand-400 text-gray-900 font-bold flex items-center justify-center mb-2 text-sm">${s.n}</div>`;
+        html += `<div class="font-semibold text-sm mb-0.5">${s.title}</div>`;
+        html += `<div class="text-xs text-gray-500 leading-relaxed">${s.body}</div>`;
+        html += `</li>`;
+      });
+      html += `</ol>`;
+      if (canInvite) {
+        html += `<div class="text-center mt-6"><button onclick="showPackerInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Send your first invite</button></div>`;
+      }
+      html += `</div>`;
     } else {
       html += emptyState('No packers match your filters', 'Try clearing search or lowering the rating threshold.');
     }

@@ -128,12 +128,6 @@
               <span>Overview</span>
             </span>
           </li>
-          <li class="sidebar-item" data-tab="orders" onclick="switchTab('orders')">
-            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
-              <i data-lucide="clipboard-list" class="w-4 h-4 flex-shrink-0"></i>
-              <span>My orders</span>
-            </span>
-          </li>
         </ul>
       </div>
 
@@ -199,6 +193,22 @@
 
         <!-- Overview tab -->
         <div id="tab-overview">
+          <!-- Profile completeness meter (hidden when 100%) -->
+          <div id="profile-meter" class="hidden mb-6 bg-white rounded-3xl shadow-card p-5">
+            <div class="flex items-center justify-between mb-2">
+              <div class="font-semibold text-sm">Profile completeness</div>
+              <button onclick="switchTab('profile')" class="text-xs text-brand-600 font-semibold hover:underline">Finish setup &rarr;</button>
+            </div>
+            <div class="flex items-baseline gap-3 mb-2">
+              <div class="text-2xl font-bold tracking-tight" id="profile-meter-fraction">0 / 6</div>
+              <div class="text-xs text-gray-500" id="profile-meter-pct">0%</div>
+            </div>
+            <div class="h-2 bg-surface-100 rounded-full overflow-hidden mb-3">
+              <div id="profile-meter-bar" class="h-full bg-brand-400 transition-all" style="width:0%"></div>
+            </div>
+            <div id="profile-meter-missing" class="text-xs text-gray-500"></div>
+          </div>
+
           <!-- Pending invites -->
           <div id="invites-section" class="hidden mb-6 bg-white rounded-3xl shadow-card p-6">
             <h2 class="font-semibold text-base mb-3">Tenant invitations</h2>
@@ -219,41 +229,6 @@
             on your collection address, so finish setting it on the
             <button onclick="switchTab('profile')" class="underline font-semibold">Profile tab</button>
             to start receiving orders.
-          </div>
-        </div>
-
-        <!-- Orders tab -->
-        <div id="tab-orders" class="hidden">
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-            <div class="bg-white rounded-3xl shadow-card p-5">
-              <div class="text-[11px] uppercase tracking-wide text-brand-700 font-semibold">Open</div>
-              <div class="text-2xl font-bold text-brand-700 mt-0.5" id="counter-open">0</div>
-            </div>
-            <div class="bg-white rounded-3xl shadow-card p-5">
-              <div class="text-[11px] uppercase tracking-wide text-green-700 font-semibold">Today</div>
-              <div class="text-2xl font-bold text-green-700 mt-0.5" id="counter-today">0</div>
-            </div>
-            <div class="bg-white rounded-3xl shadow-card p-5">
-              <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">This week</div>
-              <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-week">0</div>
-            </div>
-            <div class="bg-white rounded-3xl shadow-card p-5">
-              <div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">All time</div>
-              <div class="text-2xl font-bold text-gray-700 mt-0.5" id="counter-all">0</div>
-            </div>
-          </div>
-
-          <div class="bg-white rounded-3xl shadow-card p-6">
-            <div class="flex gap-2 mb-4">
-              <button class="orders-filter active" data-filter="open" onclick="setOrdersFilter('open')">Open</button>
-              <button class="orders-filter" data-filter="packed" onclick="setOrdersFilter('packed')">Packed</button>
-              <button class="orders-filter" data-filter="all" onclick="setOrdersFilter('all')">All</button>
-            </div>
-
-            <div id="orders-list" class="space-y-2"></div>
-            <div id="orders-empty" class="hidden text-sm text-gray-500 bg-surface-100 rounded-2xl p-4">
-              Nothing here yet.
-            </div>
           </div>
         </div>
 
@@ -443,7 +418,6 @@ let _activeTab = 'overview';
 
 const TAB_TITLES = {
   overview: { title: 'Overview', subtitle: 'Tenants you pack for' },
-  orders: { title: 'My orders', subtitle: 'Active and recent assignments' },
   packing: { title: 'Packing', subtitle: 'Pack and drop off orders' },
   'manual-upload': { title: 'Manual upload', subtitle: 'Submit waybill + PIN after a manual courier upload' },
   collections: { title: 'Collections', subtitle: 'Customer-pickup orders awaiting handover' },
@@ -503,9 +477,44 @@ function renderProfile(d) {
   renderLinks(d.links || []);
   populateProfileForm(d.packer);
   renderProfileWarning(d.packer);
+  renderProfileMeter(d.packer);
 
   // Re-render lucide icons (sidebar + topbar) now that the layout is visible
   if (window.lucide && lucide.createIcons) lucide.createIcons();
+}
+
+function renderProfileMeter(p) {
+  // Six fields we treat as "core profile". Picked so a packer with
+  // any usable collection point + identity hits 100%, regardless of
+  // type. The "either" check on collection point lives outside the
+  // simple count so a locker-only packer doesn't lose a point for
+  // not having a door address.
+  const fields = [
+    { key: 'full_name', label: 'Full name', filled: !!p.full_name },
+    { key: 'phone', label: 'Phone', filled: !!p.phone },
+    { key: 'collection_point_type', label: 'Collection point type', filled: !!p.collection_point_type },
+    { key: 'collection_point', label: 'Collection address', filled: !!p.collection_terminal_id || !!(p.collection_door_address && (p.collection_door_address.street || p.collection_door_address.city)) },
+    { key: 'collection_contact_name', label: 'Contact name', filled: !!p.collection_contact_name },
+    { key: 'collection_contact_phone', label: 'Contact phone', filled: !!p.collection_contact_phone },
+  ];
+  const filledCount = fields.filter((f) => f.filled).length;
+  const total = fields.length;
+  const card = document.getElementById('profile-meter');
+  if (!card) return;
+  if (filledCount === total) {
+    // Hide the card when fully complete — once a packer is set up they
+    // shouldn't be reminded about it forever.
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  document.getElementById('profile-meter-fraction').textContent = filledCount + ' / ' + total;
+  const pct = Math.round((filledCount / total) * 100);
+  document.getElementById('profile-meter-pct').textContent = pct + '% complete';
+  document.getElementById('profile-meter-bar').style.width = pct + '%';
+  const missing = fields.filter((f) => !f.filled).map((f) => f.label);
+  document.getElementById('profile-meter-missing').textContent =
+    missing.length ? 'Still missing: ' + missing.join(', ') : '';
 }
 
 function renderProfileWarning(p) {
@@ -716,6 +725,7 @@ async function saveProfile() {
     fb.classList.remove('hidden');
     populateProfileForm(data.data.packer);
     renderProfileWarning(data.data.packer);
+    renderProfileMeter(data.data.packer);
     // Update header subtitle / avatar in case full_name changed
     const name = data.data.packer.full_name || data.data.packer.email;
     document.getElementById('page-subtitle').textContent = name + (data.data.packer.business_name ? ' \u00b7 ' + data.data.packer.business_name : '');
@@ -747,7 +757,6 @@ function switchTab(tab) {
     }
   });
   document.getElementById('tab-overview').classList.toggle('hidden', tab !== 'overview');
-  document.getElementById('tab-orders').classList.toggle('hidden', tab !== 'orders');
   document.getElementById('tab-packing').classList.toggle('hidden', tab !== 'packing');
   document.getElementById('tab-manual-upload').classList.toggle('hidden', tab !== 'manual-upload');
   document.getElementById('tab-collections').classList.toggle('hidden', tab !== 'collections');
@@ -763,7 +772,6 @@ function switchTab(tab) {
   if (sub && meta.subtitle && tab !== 'overview') sub.textContent = meta.subtitle;
   if (mobileTitle) mobileTitle.textContent = meta.title;
 
-  if (tab === 'orders') loadMyOrders();
   if (tab === 'packing') renderPacking();
   if (tab === 'manual-upload') renderManualUpload();
   if (tab === 'collections') renderCollections();
@@ -771,169 +779,6 @@ function switchTab(tab) {
 
   // Auto-close drawer on mobile when navigating
   if (window.innerWidth < 768) closeDrawer();
-}
-
-let _ordersFilter = 'open';
-function setOrdersFilter(f) {
-  _ordersFilter = f;
-  document.querySelectorAll('.orders-filter').forEach((b) => {
-    b.classList.toggle('active', b.dataset.filter === f);
-  });
-  loadMyOrders();
-}
-
-async function loadMyOrders() {
-  const token = localStorage.getItem('packerToken');
-  if (!token) return;
-  const list = document.getElementById('orders-list');
-  const empty = document.getElementById('orders-empty');
-  list.innerHTML = '<div class="text-sm text-gray-400">Loading orders...</div>';
-  empty.classList.add('hidden');
-  try {
-    const res = await fetch('/packer-auth/orders?status=' + encodeURIComponent(_ordersFilter), {
-      headers: { Authorization: 'Bearer ' + token },
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      list.innerHTML = '';
-      empty.textContent = data?.error?.message || 'Failed to load orders';
-      empty.classList.remove('hidden');
-      return;
-    }
-    const c = data.data.counters || {};
-    document.getElementById('counter-open').textContent = c.open || 0;
-    document.getElementById('counter-today').textContent = c.packed_today || 0;
-    document.getElementById('counter-week').textContent = c.packed_this_week || 0;
-    document.getElementById('counter-all').textContent = c.packed_all_time || 0;
-
-    const orders = data.data.orders || [];
-    if (!orders.length) {
-      list.innerHTML = '';
-      empty.textContent = 'Nothing here yet.';
-      empty.classList.remove('hidden');
-      return;
-    }
-    empty.classList.add('hidden');
-    list.innerHTML = orders.map(renderOrderCard).join('');
-  } catch (e) {
-    list.innerHTML = '';
-    empty.textContent = e.message || 'Network error';
-    empty.classList.remove('hidden');
-  }
-}
-
-function renderOrderCard(o) {
-  const customerName = o.customer_name || 'Unknown';
-  const phone = o.customer_phone ? ' \u00b7 ' + escapeHtml(o.customer_phone) : '';
-  const method = o.delivery_method ? escapeHtml(o.delivery_method) : '';
-  const waybill = o.waybill ? '<span class="font-mono">' + escapeHtml(o.waybill) + '</span>' : '<span class="text-gray-400">no waybill yet</span>';
-  const packStatus = (o.packing_status || 'awaiting_packing').replace(/_/g, ' ');
-  const isPacked = o.packing_status === 'packed' || o.packing_status === 'dropped_off';
-  const pillCls = isPacked
-    ? 'bg-green-50 text-green-700'
-    : (o.packing_status === 'awaiting_packing' ? 'bg-brand-50 text-brand-700' : 'bg-surface-100 text-gray-600');
-
-  const items = (() => {
-    try {
-      const li = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : (o.line_items || []);
-      if (!Array.isArray(li) || !li.length) return '';
-      return '<div class="text-xs text-gray-500 mt-1 truncate">' +
-        li.map((i) => escapeHtml((i.name || '') + ' x ' + (i.quantity || 1))).join(', ') +
-      '</div>';
-    } catch { return ''; }
-  })();
-
-  let actions = '';
-  if (!isPacked) {
-    if (o.packing_status === 'packed') {
-      actions =
-        '<div class="flex flex-col gap-2 flex-shrink-0">' +
-          '<button onclick="markMyOrderDroppedOff(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white font-semibold rounded-full text-xs transition-all">Mark dropped off</button>' +
-          '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-surface-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs transition-all">Reject</button>' +
-        '</div>';
-    } else {
-      actions =
-        '<div class="flex flex-col gap-2 flex-shrink-0">' +
-          '<button onclick="markMyOrderPacked(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-xs transition-all">Mark packed</button>' +
-          '<button onclick="rejectMyOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number) + '\')" ' +
-          'class="px-3 py-1.5 bg-surface-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-semibold rounded-full text-xs transition-all">Reject</button>' +
-        '</div>';
-    }
-  }
-
-  return (
-    '<div class="border border-gray-100 rounded-2xl p-4 flex items-start justify-between gap-3">' +
-      '<div class="min-w-0 flex-1">' +
-        '<div class="flex items-center gap-2">' +
-          '<div class="font-semibold text-sm">' + escapeHtml(o.order_number) + '</div>' +
-          '<span class="text-[10px] px-2 py-0.5 rounded-full font-medium ' + pillCls + ' uppercase">' + escapeHtml(packStatus) + '</span>' +
-        '</div>' +
-        '<div class="text-xs text-gray-600 mt-0.5">' + escapeHtml(customerName) + phone + '</div>' +
-        '<div class="text-xs text-gray-500 mt-0.5">' + (method ? method + ' \u00b7 ' : '') + 'Waybill: ' + waybill + '</div>' +
-        items +
-      '</div>' +
-      actions +
-    '</div>'
-  );
-}
-
-async function rejectMyOrder(orderId, orderNumber) {
-  const reason = prompt('Reject order ' + orderNumber + '?\n\nOptional reason (max 200 chars):');
-  if (reason === null) return;
-  const token = localStorage.getItem('packerToken');
-  try {
-    const res = await fetch('/packer-auth/orders/' + encodeURIComponent(orderId) + '/reject', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ reason: (reason || '').slice(0, 200) }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      showFeedback(data?.error?.message || 'Reject failed', 'error');
-      return;
-    }
-    if (data.data.unassigned) {
-      showFeedback('Rejected. No other packer available — back to tenant queue.', 'success');
-    } else {
-      showFeedback('Rejected. Reassigned to another packer.', 'success');
-    }
-    loadMyOrders();
-  } catch (e) {
-    showFeedback(e.message || 'Network error', 'error');
-  }
-}
-
-async function markMyOrderPacked(orderId, orderNumber) {
-  if (!confirm('Mark order ' + orderNumber + ' as packed?')) return;
-  await packerOrderAction(orderId, '/mark-packed', 'Marked as packed.');
-}
-
-async function markMyOrderDroppedOff(orderId, orderNumber) {
-  if (!confirm('Mark order ' + orderNumber + ' as handed to courier?')) return;
-  await packerOrderAction(orderId, '/mark-dropped-off', 'Marked as dropped off.');
-}
-
-async function packerOrderAction(orderId, suffix, successMsg) {
-  const token = localStorage.getItem('packerToken');
-  try {
-    const res = await fetch('/packer-auth/orders/' + encodeURIComponent(orderId) + suffix, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: '{}',
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      showFeedback(data?.error?.message || 'Action failed', 'error');
-      return;
-    }
-    showFeedback(successMsg, 'success');
-    loadMyOrders();
-  } catch (e) {
-    showFeedback(e.message || 'Network error', 'error');
-  }
 }
 
 async function acceptInvite(token) {
@@ -1064,8 +909,32 @@ async function renderPacking() {
   }
   const orders = data.data.orders || [];
   const counts = data.data.counts || {};
+  const counters = data.data.counters || { open: 0, packed_today: 0, packed_this_week: 0, packed_all_time: 0 };
 
   let html = '';
+
+  // Performance counters strip — what used to live on the (now-removed)
+  // "My orders" tab. Open / Today / This week / All-time gives the
+  // packer a quick read on their throughput before they dive into the
+  // queue itself.
+  html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">' +
+    '<div class="bg-white rounded-3xl shadow-card p-4">' +
+      '<div class="text-[11px] uppercase tracking-wide text-brand-700 font-semibold">Open</div>' +
+      '<div class="text-2xl font-bold text-brand-700 mt-0.5">' + counters.open + '</div>' +
+    '</div>' +
+    '<div class="bg-white rounded-3xl shadow-card p-4">' +
+      '<div class="text-[11px] uppercase tracking-wide text-green-700 font-semibold">Today</div>' +
+      '<div class="text-2xl font-bold text-green-700 mt-0.5">' + counters.packed_today + '</div>' +
+    '</div>' +
+    '<div class="bg-white rounded-3xl shadow-card p-4">' +
+      '<div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">This week</div>' +
+      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + counters.packed_this_week + '</div>' +
+    '</div>' +
+    '<div class="bg-white rounded-3xl shadow-card p-4">' +
+      '<div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">All time</div>' +
+      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + counters.packed_all_time + '</div>' +
+    '</div>' +
+  '</div>';
 
   const filters = [
     { key: 'awaiting_packing', label: 'To Pack' },
@@ -1135,7 +1004,8 @@ function renderPackingCard(o) {
   let action = '';
   if (o.packing_status === 'awaiting_packing') {
     action = '<button onclick="markPacked(\'' + o.id + '\')" class="w-full mt-4 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-2xl text-sm transition-all">Mark as Packed</button>' +
-             '<button onclick="markDroppedOff(\'' + o.id + '\')" class="w-full mt-2 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Dropped-off</button>';
+             '<button onclick="markDroppedOff(\'' + o.id + '\')" class="w-full mt-2 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Dropped-off</button>' +
+             '<button onclick="rejectAssignedOrder(\'' + o.id + '\', \'' + escapeHtml(o.order_number || '') + '\')" class="w-full mt-2 py-2 bg-surface-100 hover:bg-red-50 text-gray-600 hover:text-red-600 font-medium rounded-xl text-xs transition-all">Reject assignment</button>';
   } else if (o.packing_status === 'packed') {
     action = '<button onclick="markDroppedOff(\'' + o.id + '\')" class="w-full mt-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Dropped-off</button>' +
              '<button onclick="revertPacking(\'' + o.id + '\')" class="w-full mt-2 py-2 bg-surface-100 hover:bg-surface-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert to Awaiting</button>';
@@ -1197,6 +1067,20 @@ async function revertPacking(orderId) {
   const { data } = await packerApi('POST', '/packer-auth/orders/' + encodeURIComponent(orderId) + '/revert', {});
   if (data.success) { toast('Reverted', 'info'); renderPacking(); }
   else toast(data.error?.message || 'Failed', 'error');
+}
+
+async function rejectAssignedOrder(orderId, orderNumber) {
+  const reason = prompt('Reject order ' + orderNumber + '?\n\nOptional reason (max 200 chars):');
+  if (reason === null) return;
+  const { data } = await packerApi('POST', '/packer-auth/orders/' + encodeURIComponent(orderId) + '/reject', { reason: (reason || '').slice(0, 200) });
+  if (!data.success) {
+    toast(data.error?.message || 'Reject failed', 'error');
+    return;
+  }
+  toast(data.data.unassigned
+    ? 'Rejected. No other packer available — back to tenant queue.'
+    : 'Rejected. Reassigned to another packer.', 'success');
+  renderPacking();
 }
 
 // ---- Manual Upload ----

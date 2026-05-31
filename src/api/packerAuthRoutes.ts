@@ -661,7 +661,45 @@ router.get('/queue', packerAuthMiddleware, async (req: PackerAuthenticatedReques
   const countMap: Record<string, number> = {};
   counts.forEach((c: any) => { countMap[c.packing_status] = parseInt(c.count, 10); });
 
-  return res.status(200).json({ success: true, data: { orders, counts: countMap } });
+  // Time-bucket counters for the Packing tab header (open / today /
+  // this week / all time). These mirror the counters the (now-
+  // deprecated) /packer-auth/orders endpoint returned, surfaced
+  // here so renderPacking can display them without a second
+  // round-trip.
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfWeek = new Date();
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
+
+  const [todayRow, weekRow, allTimeRow, openRow] = await Promise.all([
+    db('orders')
+      .where({ assigned_packer_id: packerId })
+      .whereIn('packing_status', ['packed', 'dropped_off'])
+      .where('packed_at', '>=', startOfDay)
+      .count('* as n').first(),
+    db('orders')
+      .where({ assigned_packer_id: packerId })
+      .whereIn('packing_status', ['packed', 'dropped_off'])
+      .where('packed_at', '>=', startOfWeek)
+      .count('* as n').first(),
+    db('orders')
+      .where({ assigned_packer_id: packerId })
+      .whereIn('packing_status', ['packed', 'dropped_off'])
+      .count('* as n').first(),
+    db('orders')
+      .where({ assigned_packer_id: packerId })
+      .whereNotIn('packing_status', ['packed', 'dropped_off'])
+      .count('* as n').first(),
+  ]);
+
+  const counters = {
+    open: Number((openRow as any)?.n || 0),
+    packed_today: Number((todayRow as any)?.n || 0),
+    packed_this_week: Number((weekRow as any)?.n || 0),
+    packed_all_time: Number((allTimeRow as any)?.n || 0),
+  };
+
+  return res.status(200).json({ success: true, data: { orders, counts: countMap, counters } });
 });
 
 // ---------------------------------------------------------------------------
