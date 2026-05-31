@@ -304,7 +304,7 @@ async function sendDigestMessage(args: {
  */
 export function formatDigestBody(name: string, s: DigestSummary): string {
   const lines: string[] = [];
-  lines.push(`Hi ${name}, your weekly RelayOS packer summary:`);
+  lines.push(`Hi ${name}, your weekly Kwikstix fixer summary:`);
   lines.push('');
   if (s.thisWeekOverall !== null) {
     lines.push(`★ Overall this week: ${s.thisWeekOverall.toFixed(2)} / 5  (${s.thisWeekCount} rating${s.thisWeekCount === 1 ? '' : 's'})`);

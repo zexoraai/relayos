@@ -204,9 +204,9 @@ router.post('/invites', requirePermission('packers.invite'), async (req: Authent
       const fullUrl = baseUrl.replace(/\/$/, '') + accept_url;
 
       const tenant = await db('tenants').where({ id: tenantId }).first('email');
-      const tenantLabel = tenant?.email ? `the team at ${tenant.email}` : 'a RelayOS tenant';
+      const tenantLabel = tenant?.email ? `the team at ${tenant.email}` : 'a Kwikstix tenant';
       const body = [
-        `Hi! ${tenantLabel} has invited you to join their packer roster on RelayOS.`,
+        `Hi! ${tenantLabel} has invited you to join their Kwikfixer roster on Kwikstix.`,
         ``,
         `Tap to accept and finish setup:`,
         fullUrl,

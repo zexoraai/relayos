@@ -17,6 +17,7 @@ describe('formatDigestBody', () => {
       worstCriterion: { name: 'Speed', score: 3.5 },
     });
     expect(body).toContain('Hi Sam');
+    expect(body).toContain('weekly Kwikstix fixer summary');
     expect(body).toContain('★ Overall this week: 4.25 / 5');
     expect(body).toContain('(4 ratings)');
     expect(body).toContain('Up 0.25 from last week');

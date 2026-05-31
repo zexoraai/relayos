@@ -373,7 +373,7 @@ function switchTab(tab) {
   }
   currentTab = tab;
   document.getElementById('page-title').textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
-  const subtitles = { overview:'Welcome back', orders:'Every order in one place', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', packers:'Invite and manage independent packers', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
+  const subtitles = { overview:'Welcome back', orders:'Every order in one place', pipeline:'Order ingestion pipeline', packing:'Pack and drop off orders', fulfillment:'Tracking & delivery', agents:'AI agent configuration', 'chatbot-config':'Chatbot personality and behavior', caretaker:'Order review rules', whatsapp:'Messaging & notifications', inbox:'Customer conversations', knowledge:'Knowledge base', customers:'Customer directory', users:'Team members and permissions', packers:'Invite and manage Kwikfixers', usage:'AI token & cost tracking', failed:'Dead-letter queues', health:'System status', settings:'Account configuration' };
   document.getElementById('page-subtitle').textContent = subtitles[tab] || '';
   document.querySelectorAll('.sidebar-item').forEach(li => li.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(li => { const txt = li.querySelector('span'); if(txt && txt.textContent.toLowerCase()===tab) li.classList.add('active'); });
@@ -1489,7 +1489,7 @@ async function openOrderDrawer(orderId) {
   })();
   const isComplete = o.packing_status === 'dropped_off' || o.status === 'delivered';
   if (ratablePackerId && isComplete) {
-    h += `<button onclick="openRatePackerModal('${ratablePackerId}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="text-[11px] px-3 py-1 rounded-full bg-brand-50 text-brand-700 hover:bg-brand-100 font-semibold">Rate packer</button>`;
+    h += `<button onclick="openRatePackerModal('${ratablePackerId}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="text-[11px] px-3 py-1 rounded-full bg-brand-50 text-brand-700 hover:bg-brand-100 font-semibold">Rate fixer</button>`;
   }
   h += `</div>`;
 
@@ -4118,7 +4118,7 @@ function renderPackingCard(o) {
     const droppedAt = o.dropped_off_at ? new Date(o.dropped_off_at).toLocaleString('en-ZA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     action = `<div class="mt-4 py-3 bg-green-50 text-green-700 font-semibold rounded-2xl text-sm text-center">Handed to courier${droppedAt ? ' - ' + droppedAt : ''}</div>`;
     if (o.assigned_packer_id) {
-      action += `<button onclick="openRatePackerModal('${o.assigned_packer_id}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="w-full mt-2 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-xl text-xs transition-all">Rate packer</button>`;
+      action += `<button onclick="openRatePackerModal('${o.assigned_packer_id}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="w-full mt-2 py-2 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-xl text-xs transition-all">Rate fixer</button>`;
     }
     action += `<button onclick="revertPacking('${o.id}')" class="w-full mt-2 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert</button>`;
   }
@@ -4231,7 +4231,7 @@ function openRatePackerModal(packerId, orderId, orderNumber) {
     <button onclick="closeModal()" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Cancel</button>
     <button onclick="submitRatePacker('${packerId}','${orderId}')" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm">Save rating</button>
   `;
-  openModal('Rate packer', body, footer);
+  openModal('Rate fixer', body, footer);
 }
 
 async function submitRatePacker(packerId, orderId) {
@@ -4331,7 +4331,7 @@ async function viewPackerRatings(packerId, packerLabel) {
   // This tenant's own rating rows
   html += `<div class="font-semibold text-sm mb-2">Your ratings (${mine.length})</div>`;
   if (mine.length === 0) {
-    html += `<div class="text-sm text-gray-400">You haven't rated this packer yet. Use the "Rate packer" button on a dropped-off order.</div>`;
+    html += `<div class="text-sm text-gray-400">You haven't rated this fixer yet. Use the "Rate fixer" button on a dropped-off order.</div>`;
   } else {
     html += `<div class="space-y-2">`;
     mine.forEach((r) => {
@@ -4890,21 +4890,21 @@ async function renderPackers() {
   // Top bar
   html += `<div class="flex items-center justify-between mb-6">`;
   html += `<div>`;
-  html += `<h3 class="text-lg font-bold">Independent Packers</h3>`;
+  html += `<h3 class="text-lg font-bold">Kwikfixers</h3>`;
   html += `<p class="text-sm text-gray-400 mt-0.5">${activeCount} active · ${pausedCount} paused · ${pendingInvites.length} pending invite${pendingInvites.length===1?'':'s'}</p>`;
   html += `</div>`;
   if (canInvite) {
-    html += `<button onclick="showPackerInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Invite Packer</button>`;
+    html += `<button onclick="showPackerInviteModal()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Invite a Kwikfixer</button>`;
   }
   html += `</div>`;
 
   // Distribution mode selector
   const mode = settings.packer_assignment_mode || 'off';
   const modeLabels = {
-    off: 'Off — never assign to independent packers',
-    independents_only: 'Independents only — round-robin to linked packers',
+    off: 'Off — never assign to a Kwikfixer',
+    independents_only: 'Kwikfixers only — round-robin across linked fixers',
     split_evenly: 'Split evenly with internal team',
-    internal_first: 'Internal first, fall back to packers',
+    internal_first: 'Internal first, fall back to Kwikfixers',
   };
   html += `<div class="bg-white rounded-3xl shadow-card p-5 mb-6">`;
   html += `<div class="flex items-center justify-between gap-4 flex-wrap">`;
@@ -4927,7 +4927,7 @@ async function renderPackers() {
   // Linked packers table
   html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden mb-6">`;
   html += `<div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">`;
-  html += `<div class="font-semibold text-sm">Linked packers</div>`;
+  html += `<div class="font-semibold text-sm">Linked Kwikfixers</div>`;
   html += `<div class="flex items-center gap-2 flex-wrap">`;
   html += `<input id="packers-search" value="${escapeHtml(search)}" placeholder="Search by name, email, phone…" onkeydown="if(event.key==='Enter')doPackersSearch()" class="px-3 py-1.5 bg-surface-100 rounded-full text-xs border-0 placeholder-gray-400 focus:ring-2 focus:ring-brand-200 w-48">`;
   // Min-rating chips. 0 means no floor (default).
@@ -4948,14 +4948,14 @@ async function renderPackers() {
       // before throwing the operator at an empty table.
       html += `<div class="px-5 py-8">`;
       html += `<div class="text-center max-w-xl mx-auto mb-6">`;
-      html += `<h4 class="text-base font-semibold mb-1">No packers yet</h4>`;
-      html += `<p class="text-sm text-gray-500">Independent packers receive orders the assigner picks for them and pack from their own collection point. Here's how the loop works once you invite one:</p>`;
+      html += `<h4 class="text-base font-semibold mb-1">No Kwikfixers yet</h4>`;
+      html += `<p class="text-sm text-gray-500">Kwikfixers receive orders the assigner picks for them and pack from their own collection point. Here's how the loop works once you invite one:</p>`;
       html += `</div>`;
       html += `<ol class="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl mx-auto">`;
       const steps = [
-        { n: 1, title: 'You invite', body: 'Send an invite by email. The packer signs up (or logs in) and accepts. The link goes active immediately.' },
-        { n: 2, title: 'Order arrives', body: 'When a new order matches your assignment mode, the assigner picks the lowest-load active packer with a configured collection point.' },
-        { n: 3, title: 'Packer ships', body: 'The packer marks orders packed and dropped off from their own dashboard. Tracking flows back through fulfillment as usual.' },
+        { n: 1, title: 'You invite', body: 'Send an invite by email or WhatsApp. The fixer signs up (or logs in) and accepts. The link goes active immediately.' },
+        { n: 2, title: 'Order arrives', body: 'When a new order matches your assignment mode, the assigner picks the lowest-load active Kwikfixer with a configured collection point.' },
+        { n: 3, title: 'Fixer ships', body: 'The fixer marks orders packed and dropped off from their own dashboard. Tracking flows back through fulfillment as usual.' },
       ];
       steps.forEach((s) => {
         html += `<li class="bg-surface-100 rounded-2xl p-4">`;
@@ -4970,7 +4970,7 @@ async function renderPackers() {
       }
       html += `</div>`;
     } else {
-      html += emptyState('No packers match your filters', 'Try clearing search or lowering the rating threshold.');
+      html += emptyState('No Kwikfixers match your filters', 'Try clearing search or lowering the rating threshold.');
     }
   } else {
     html += `<table class="w-full text-sm">`;
@@ -5142,9 +5142,9 @@ function showPackerInviteModal() {
   const body = `
     <div class="space-y-4">
       <div>
-        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Packer email</label>
-        <input id="pinv-email" type="email" placeholder="packer@example.com" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
-        <p class="text-xs text-gray-400 mt-1">They'll get a link to create their packer account and accept the invite.</p>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Fixer email</label>
+        <input id="pinv-email" type="email" placeholder="fixer@example.com" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0 focus:ring-2 focus:ring-brand-400">
+        <p class="text-xs text-gray-400 mt-1">They'll get a link to create their Kwikfixer account and accept the invite.</p>
       </div>
       <div>
         <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">WhatsApp phone <span class="text-gray-400 normal-case font-normal">(optional)</span></label>
@@ -5162,7 +5162,7 @@ function showPackerInviteModal() {
       </div>
       <button onclick="submitPackerInvite()" class="w-full py-3 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full transition-all">Send invite</button>
     </div>`;
-  openModal('Invite independent packer', body);
+  openModal('Invite a Kwikfixer', body);
 }
 
 async function submitPackerInvite() {
@@ -5224,7 +5224,7 @@ async function revokePackerInvite(id, email) {
 async function togglePackerLink(id, newStatus) {
   const { data } = await api('PUT', `/packers/links/${id}`, { status: newStatus });
   if (data && data.success) {
-    toast(newStatus === 'paused' ? 'Packer paused' : 'Packer resumed', 'success');
+    toast(newStatus === 'paused' ? 'Fixer paused' : 'Fixer resumed', 'success');
     renderPackers();
   } else {
     toast(data?.error?.message || 'Failed', 'error');
@@ -5289,7 +5289,7 @@ async function unlinkPacker(id, displayName) {
   const reason = prompt('Unlink ' + displayName + '?\n\nOptional reason (max 30 chars):');
   if (reason === null) return;
   const { data } = await api('POST', `/packers/links/${id}/unlink`, { reason: (reason || '').slice(0, 30) });
-  if (data && data.success) { toast('Packer unlinked', 'info'); renderPackers(); }
+  if (data && data.success) { toast('Fixer unlinked', 'info'); renderPackers(); }
   else toast(data?.error?.message || 'Failed', 'error');
 }
 
