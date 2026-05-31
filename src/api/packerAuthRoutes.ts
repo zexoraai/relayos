@@ -530,6 +530,332 @@ router.post('/orders/:id/mark-dropped-off', packerAuthMiddleware, async (req: Pa
 });
 
 // ---------------------------------------------------------------------------
+// POST /packer-auth/orders/:id/revert
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirror of the tenant `/packer/orders/:id/revert`, scoped to the
+ * packer's own assigned orders. Sends an order back to
+ * awaiting_packing if the packer flipped the wrong status (e.g.
+ * marked packed by mistake). Clears packed_at / dropped_off_at so
+ * the row looks the same as a fresh assignment.
+ */
+router.post('/orders/:id/revert', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const id = req.params.id as string;
+
+  const updated = await db('orders')
+    .where({ id, assigned_packer_id: packerId })
+    .update({
+      packing_status: 'awaiting_packing',
+      packed_at: null,
+      dropped_off_at: null,
+      updated_at: new Date(),
+    })
+    .returning(['id', 'order_number', 'packing_status']);
+
+  if (!updated || updated.length === 0) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not assigned to you' } });
+  }
+  log.info({ packerId, orderId: id }, 'Packer reverted order to awaiting_packing');
+  return res.status(200).json({ success: true, data: updated[0] });
+});
+
+// ---------------------------------------------------------------------------
+// GET /packer-auth/queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Packing workbench — same shape as tenant `/packer/queue` but
+ * scoped to orders where assigned_packer_id = me. The frontend
+ * renderer in packer-dashboard.html is a port of `renderPacking`
+ * from public/app.js, so the response keys MUST match:
+ *   { orders: Order[], counts: { [packing_status]: number } }
+ *
+ * Filterable by ?status= awaiting_packing | packed | dropped_off | all.
+ * Search across order_number / customer_name / customer_phone / waybill.
+ */
+router.get('/queue', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const status = String(req.query.status || 'awaiting_packing').toLowerCase();
+  const limit = Math.min(parseInt(String(req.query.limit) || '100', 10) || 100, 500);
+  const search = String(req.query.search || '').trim();
+
+  let q = db('orders')
+    .where({ assigned_packer_id: packerId })
+    .whereNotNull('waybill')
+    .orderBy('created_at', 'desc')
+    .limit(limit);
+
+  if (status !== 'all') q = q.andWhere({ packing_status: status });
+  if (search) {
+    q = q.andWhere(function () {
+      this.where('order_number', 'ilike', `%${search}%`)
+        .orWhere('customer_name', 'ilike', `%${search}%`)
+        .orWhere('customer_phone', 'ilike', `%${search}%`)
+        .orWhere('waybill', 'ilike', `%${search}%`);
+    });
+  }
+
+  const orders = await q
+    .leftJoin('tenants as t', 't.id', 'orders.tenant_id')
+    .select(
+      'orders.id', 'orders.order_number', 'orders.customer_name', 'orders.customer_phone',
+      'orders.delivery_method', 'orders.delivery_address', 'orders.line_items',
+      'orders.waybill', 'orders.pincode', 'orders.terminal_id', 'orders.nearest_locker_name',
+      'orders.packing_status', 'orders.packed_at', 'orders.dropped_off_at', 'orders.packing_note',
+      'orders.created_at',
+      't.email as tenant_email',
+    );
+
+  // Counts per packing_status across THIS packer's assigned orders only
+  const counts = await db('orders')
+    .where({ assigned_packer_id: packerId })
+    .whereNotNull('waybill')
+    .select('packing_status')
+    .count<{ packing_status: string; count: string }[]>('id as count')
+    .groupBy('packing_status');
+
+  const countMap: Record<string, number> = {};
+  counts.forEach((c: any) => { countMap[c.packing_status] = parseInt(c.count, 10); });
+
+  return res.status(200).json({ success: true, data: { orders, counts: countMap } });
+});
+
+// ---------------------------------------------------------------------------
+// GET /packer-auth/manual-upload-queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer-scoped mirror of /manual/upload-queue. Returns orders
+ * routed to manual upload that are assigned to this packer.
+ *
+ * Same response shape so the frontend can use a port of the
+ * tenant-side `renderManualUpload`:
+ *   { orders: Order[], counts: { pending, completed } }
+ */
+router.get('/manual-upload-queue', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const status = String(req.query.status || 'pending').toLowerCase();
+  const limit = Math.min(parseInt(String(req.query.limit) || '100', 10) || 100, 500);
+
+  let q = db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'manual_upload' })
+    .orderBy('created_at', 'desc')
+    .limit(limit);
+
+  if (status === 'pending') q = q.whereNull('waybill');
+  else if (status === 'completed') q = q.whereNotNull('waybill');
+
+  const orders = await q
+    .leftJoin('tenants as t', 't.id', 'orders.tenant_id')
+    .select(
+      'orders.id', 'orders.order_number', 'orders.customer_name', 'orders.customer_phone',
+      'orders.delivery_method', 'orders.delivery_address', 'orders.line_items',
+      'orders.waybill', 'orders.pincode', 'orders.manual_upload_reason',
+      'orders.manual_uploaded_at', 'orders.status', 'orders.created_at',
+      't.email as tenant_email',
+    );
+
+  const pendingCount = await db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'manual_upload' })
+    .whereNull('waybill').count<{count:string}[]>('id as count');
+  const completedCount = await db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'manual_upload' })
+    .whereNotNull('waybill').count<{count:string}[]>('id as count');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      orders,
+      counts: {
+        pending: parseInt(pendingCount[0]?.count || '0', 10),
+        completed: parseInt(completedCount[0]?.count || '0', 10),
+      },
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /packer-auth/manual-upload-queue/:id/complete
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer submits the waybill + pin they got from the courier
+ * portal after a manual upload. Mirrors the tenant
+ * `/manual/upload-queue/:id/complete` and emits the same
+ * `order.confirmed` domain event so WhatsApp notifications fire.
+ *
+ * Scoped to assigned_packer_id = me so a packer can't complete
+ * orders that aren't theirs even if they guess an id.
+ */
+router.post('/manual-upload-queue/:id/complete', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const id = req.params.id as string;
+  const { waybill, pincode } = req.body || {};
+
+  if (!waybill || !String(waybill).trim()) {
+    return res.status(400).json({ success: false, error: { code: 'MISSING_FIELDS', message: 'waybill is required' } });
+  }
+
+  const order = await db('orders')
+    .where({ id, assigned_packer_id: packerId, routing_status: 'manual_upload' })
+    .first();
+  if (!order) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not in your manual queue' } });
+  }
+
+  await db('orders').where({ id }).update({
+    waybill: String(waybill).trim(),
+    pincode: pincode ? String(pincode).trim() : null,
+    status: 'submitted',
+    courier_status: 'deposit-pending',
+    packing_status: 'awaiting_packing',
+    manual_uploaded_at: new Date(),
+    updated_at: new Date(),
+  });
+
+  // Emit order.confirmed so WhatsApp notifications fire — mirrors the
+  // tenant-side flow exactly.
+  try {
+    const { emitEvent, DomainEventType } = await import('../events');
+    await emitEvent({
+      tenantId: order.tenant_id,
+      type: DomainEventType.ORDER_CONFIRMED,
+      aggregateType: 'order',
+      aggregateId: id,
+      payload: {
+        order_number: order.order_number,
+        waybill: String(waybill).trim(),
+        pincode: pincode ? String(pincode).trim() : null,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        delivery_method: order.delivery_method,
+        manual_upload: true,
+      },
+    });
+  } catch (e: any) {
+    log.warn({ orderId: id, error: e.message }, 'Failed to emit ORDER_CONFIRMED for packer manual upload');
+  }
+
+  log.info({ packerId, orderId: id, waybill: String(waybill).trim() }, 'Packer completed manual upload');
+  return res.status(200).json({
+    success: true,
+    data: { message: 'Waybill recorded. Order is now in the fulfillment pipeline.' },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /packer-auth/collection-queue
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer-scoped mirror of /manual/collection-queue. Orders where
+ * the customer picks up the parcel (routing_status = 'collection')
+ * and the packer is the assigned dropoff point.
+ *
+ * Response shape matches the tenant route:
+ *   { orders: Order[], counts: { pending, collected } }
+ */
+router.get('/collection-queue', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const status = String(req.query.status || 'pending').toLowerCase();
+  const limit = Math.min(parseInt(String(req.query.limit) || '100', 10) || 100, 500);
+
+  let q = db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'collection' })
+    .orderBy('created_at', 'desc')
+    .limit(limit);
+
+  if (status === 'pending') q = q.whereNull('collected_at');
+  else if (status === 'collected') q = q.whereNotNull('collected_at');
+
+  const orders = await q
+    .leftJoin('tenants as t', 't.id', 'orders.tenant_id')
+    .select(
+      'orders.id', 'orders.order_number', 'orders.customer_name', 'orders.customer_phone',
+      'orders.delivery_method', 'orders.line_items',
+      'orders.collected_at', 'orders.collection_note', 'orders.status', 'orders.created_at',
+      't.email as tenant_email',
+    );
+
+  const pendingCount = await db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'collection' })
+    .whereNull('collected_at').count<{count:string}[]>('id as count');
+  const collectedCount = await db('orders')
+    .where({ assigned_packer_id: packerId, routing_status: 'collection' })
+    .whereNotNull('collected_at').count<{count:string}[]>('id as count');
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      orders,
+      counts: {
+        pending: parseInt(pendingCount[0]?.count || '0', 10),
+        collected: parseInt(collectedCount[0]?.count || '0', 10),
+      },
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /packer-auth/collection-queue/:id/confirm
+// ---------------------------------------------------------------------------
+
+/**
+ * Packer confirms the customer has collected the order. Mirrors
+ * `/manual/collection-queue/:id/confirm` — sets collected_at,
+ * marks the order delivered, and emits ORDER_DELIVERED so the
+ * customer's WhatsApp gets a "thanks for collecting" message.
+ */
+router.post('/collection-queue/:id/confirm', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, res: Response) => {
+  const db = getDb();
+  const packerId = req.packer!.packerId;
+  const id = req.params.id as string;
+  const note = (req.body?.note || '').toString().trim();
+
+  const order = await db('orders')
+    .where({ id, assigned_packer_id: packerId, routing_status: 'collection' })
+    .first();
+  if (!order) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not in your collection queue' } });
+  }
+
+  await db('orders').where({ id }).update({
+    status: 'delivered',
+    collected_at: new Date(),
+    collection_note: note || null,
+    updated_at: new Date(),
+  });
+
+  try {
+    const { emitEvent, DomainEventType } = await import('../events');
+    await emitEvent({
+      tenantId: order.tenant_id,
+      type: DomainEventType.ORDER_DELIVERED,
+      aggregateType: 'order',
+      aggregateId: id,
+      payload: {
+        order_number: order.order_number,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        collection: true,
+      },
+    });
+  } catch (e: any) {
+    log.warn({ orderId: id, error: e.message }, 'Failed to emit ORDER_DELIVERED for packer collection confirm');
+  }
+
+  log.info({ packerId, orderId: id }, 'Packer confirmed collection');
+  return res.status(200).json({ success: true, data: { message: 'Collection confirmed' } });
+});
+
+// ---------------------------------------------------------------------------
 // POST /packer-auth/logout
 // ---------------------------------------------------------------------------
 

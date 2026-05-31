@@ -134,6 +134,36 @@
               <span>My orders</span>
             </span>
           </li>
+        </ul>
+      </div>
+
+      <div class="mb-1">
+        <div class="px-3 py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Operations</div>
+        <ul class="space-y-0.5">
+          <li class="sidebar-item" data-tab="packing" onclick="switchTab('packing')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
+              <i data-lucide="package" class="w-4 h-4 flex-shrink-0"></i>
+              <span>Packing</span>
+            </span>
+          </li>
+          <li class="sidebar-item" data-tab="manual-upload" onclick="switchTab('manual-upload')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
+              <i data-lucide="upload" class="w-4 h-4 flex-shrink-0"></i>
+              <span>Manual upload</span>
+            </span>
+          </li>
+          <li class="sidebar-item" data-tab="collections" onclick="switchTab('collections')">
+            <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
+              <i data-lucide="hand" class="w-4 h-4 flex-shrink-0"></i>
+              <span>Collections</span>
+            </span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="mb-1">
+        <div class="px-3 py-2 text-[10px] uppercase tracking-widest text-gray-500 font-semibold">Account</div>
+        <ul class="space-y-0.5">
           <li class="sidebar-item" data-tab="profile" onclick="switchTab('profile')">
             <span class="flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all hover:bg-white/5 text-gray-400">
               <i data-lucide="user" class="w-4 h-4 flex-shrink-0"></i>
@@ -225,6 +255,21 @@
               Nothing here yet.
             </div>
           </div>
+        </div>
+
+        <!-- Packing tab (renderer fills #packing-content) -->
+        <div id="tab-packing" class="hidden">
+          <div id="packing-content"></div>
+        </div>
+
+        <!-- Manual Upload tab (renderer fills #manual-content) -->
+        <div id="tab-manual-upload" class="hidden">
+          <div id="manual-content"></div>
+        </div>
+
+        <!-- Collections tab (renderer fills #collections-content) -->
+        <div id="tab-collections" class="hidden">
+          <div id="collections-content"></div>
         </div>
 
         <!-- Profile tab -->
@@ -346,6 +391,9 @@
   </main>
 </div>
 
+<!-- Toast container (used by Packing/Manual/Collections renderers) -->
+<div id="toast-container" class="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2"></div>
+
 <script>
 let _packerEmail = null;
 let _activeTab = 'overview';
@@ -353,6 +401,9 @@ let _activeTab = 'overview';
 const TAB_TITLES = {
   overview: { title: 'Overview', subtitle: 'Tenants you pack for' },
   orders: { title: 'My orders', subtitle: 'Active and recent assignments' },
+  packing: { title: 'Packing', subtitle: 'Pack and drop off orders' },
+  'manual-upload': { title: 'Manual upload', subtitle: 'Submit waybill + PIN after a manual courier upload' },
+  collections: { title: 'Collections', subtitle: 'Customer-pickup orders awaiting handover' },
   profile: { title: 'Profile', subtitle: 'Identity and collection address' },
 };
 
@@ -604,6 +655,9 @@ function switchTab(tab) {
   });
   document.getElementById('tab-overview').classList.toggle('hidden', tab !== 'overview');
   document.getElementById('tab-orders').classList.toggle('hidden', tab !== 'orders');
+  document.getElementById('tab-packing').classList.toggle('hidden', tab !== 'packing');
+  document.getElementById('tab-manual-upload').classList.toggle('hidden', tab !== 'manual-upload');
+  document.getElementById('tab-collections').classList.toggle('hidden', tab !== 'collections');
   document.getElementById('tab-profile').classList.toggle('hidden', tab !== 'profile');
 
   // Update page header + mobile topbar title
@@ -617,6 +671,9 @@ function switchTab(tab) {
   if (mobileTitle) mobileTitle.textContent = meta.title;
 
   if (tab === 'orders') loadMyOrders();
+  if (tab === 'packing') renderPacking();
+  if (tab === 'manual-upload') renderManualUpload();
+  if (tab === 'collections') renderCollections();
 
   // Auto-close drawer on mobile when navigating
   if (window.innerWidth < 768) closeDrawer();
@@ -830,6 +887,389 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ============================================================
+// Packing / Manual Upload / Collections — ports of the tenant-side
+// renderers from public/app.js, repointed at /packer-auth/* so each
+// packer only sees orders assigned to them. Card markup, filter
+// chips and tone classes are kept identical so the dashboard feels
+// indistinguishable from the main app.
+// ============================================================
+
+const PACKER_TAB_REFRESH_MS = 20000;
+let _packingFilter = 'awaiting_packing';
+let _packingSearch = '';
+let _packingTimer = null;
+
+const MANUAL_TONE_CLASSES = {
+  blue:   { bg: 'bg-blue-50',   text: 'text-blue-700',   ring: 'border-blue-200',   pill: 'bg-blue-100 text-blue-700' },
+  red:    { bg: 'bg-red-50',    text: 'text-red-600',    ring: 'border-red-200',    pill: 'bg-red-100 text-red-700' },
+  amber:  { bg: 'bg-amber-50',  text: 'text-amber-700',  ring: 'border-amber-200',  pill: 'bg-amber-100 text-amber-800' },
+  indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'border-indigo-200', pill: 'bg-indigo-100 text-indigo-700' },
+  gray:   { bg: 'bg-gray-50',   text: 'text-gray-700',   ring: 'border-gray-200',   pill: 'bg-gray-100 text-gray-700' },
+};
+
+function _classifyManualReason(reason) {
+  const r = (reason || '').toLowerCase();
+  if (r.includes('no eligible') && r.includes('locker')) return { key: 'no_locker', label: 'No locker', tone: 'amber', hint: 'No PUDO locker in range \u2014 ship via kiosk or call the customer.' };
+  if (r.includes('caretaker') || r.includes('reject')) return { key: 'caretaker', label: 'Caretaker review', tone: 'red', hint: 'Held by caretaker rules \u2014 review the original evaluation before shipping.' };
+  if (r.includes('collection')) return { key: 'collection', label: 'Collection', tone: 'blue', hint: 'Customer is collecting \u2014 confirm in the Collections tab.' };
+  if (r.includes('manual')) return { key: 'manual', label: 'Routed manual', tone: 'indigo', hint: 'Order was routed to manual upload by the tenant.' };
+  return { key: 'other', label: 'Other', tone: 'gray', hint: '' };
+}
+
+async function packerApi(method, path, body) {
+  const token = localStorage.getItem('packerToken');
+  const opts = { method: method, headers: { Authorization: 'Bearer ' + token } };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  let data;
+  try { data = await res.json(); }
+  catch { data = { success: false, error: { message: 'Invalid server response' } }; }
+  return { ok: res.ok, status: res.status, data: data };
+}
+
+function toast(message, type) {
+  type = type || 'info';
+  const root = document.getElementById('toast-container');
+  if (!root) return;
+  const colors = { success: 'bg-green-500', error: 'bg-red-500', info: 'bg-indigo-500', warning: 'bg-amber-500' };
+  const el = document.createElement('div');
+  el.className = (colors[type] || colors.info) + ' text-white px-5 py-3 rounded-2xl text-sm font-medium shadow-lg animate-fadeUp max-w-sm';
+  el.textContent = message;
+  root.appendChild(el);
+  setTimeout(function () {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(8px)';
+    el.style.transition = 'all 0.3s';
+    setTimeout(function () { el.remove(); }, 300);
+  }, 3500);
+}
+
+function emptyState(title, sub) {
+  return '<div class="text-center py-10">' +
+    '<div class="text-base font-semibold text-gray-700">' + escapeHtml(title) + '</div>' +
+    (sub ? '<div class="text-sm text-gray-400 mt-1">' + escapeHtml(sub) + '</div>' : '') +
+    '</div>';
+}
+
+// ---- Packing ----
+
+async function renderPacking() {
+  const url = '/packer-auth/queue?status=' + encodeURIComponent(_packingFilter) +
+    (_packingSearch ? '&search=' + encodeURIComponent(_packingSearch) : '');
+  const { data } = await packerApi('GET', url);
+  const root = document.getElementById('packing-content');
+  if (!data.success) {
+    root.innerHTML = '<div class="bg-white rounded-3xl shadow-card p-6">' + emptyState('Failed to load', data?.error?.message || '') + '</div>';
+    return;
+  }
+  const orders = data.data.orders || [];
+  const counts = data.data.counts || {};
+
+  let html = '';
+
+  const filters = [
+    { key: 'awaiting_packing', label: 'To Pack' },
+    { key: 'packed', label: 'Packed' },
+    { key: 'dropped_off', label: 'Dropped Off' },
+    { key: 'all', label: 'All' },
+  ];
+  html += '<div class="flex items-center gap-2 mb-4 flex-wrap">';
+  filters.forEach(function (f) {
+    const active = f.key === _packingFilter;
+    const count = f.key === 'all'
+      ? Object.values(counts).reduce(function (a, b) { return a + b; }, 0)
+      : (counts[f.key] || 0);
+    html += '<button onclick="setPackingFilter(\'' + f.key + '\')" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' +
+      (active ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200 hover:border-brand-300 hover:text-gray-900') +
+      '">' + escapeHtml(f.label) + ' (' + count + ')</button>';
+  });
+  html += '</div>';
+
+  html += '<div class="flex gap-2 mb-6">' +
+    '<input id="packing-search" value="' + escapeHtml(_packingSearch) + '" placeholder="Search by order #, customer name, phone, or waybill..." onkeydown="if(event.key===\'Enter\')doPackingSearch()" class="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm placeholder-gray-400 focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all">' +
+    '<button onclick="doPackingSearch()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-lg text-sm transition-all">Search</button>' +
+    (_packingSearch ? '<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>' : '') +
+    '</div>';
+
+  if (orders.length === 0) {
+    html += '<div class="bg-white rounded-3xl shadow-card p-6">' +
+      emptyState('Nothing to pack', _packingFilter === 'awaiting_packing'
+        ? 'All orders are packed and dropped off. Great job.'
+        : 'No orders match the current filter.') +
+      '</div>';
+  } else {
+    html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
+    orders.forEach(function (o) { html += renderPackingCard(o); });
+    html += '</div>';
+  }
+
+  root.innerHTML = html;
+
+  // Auto-refresh awaiting list so packers see new assignments quickly
+  clearTimeout(_packingTimer);
+  if (_packingFilter === 'awaiting_packing' && _activeTab === 'packing') {
+    _packingTimer = setTimeout(function () {
+      if (_activeTab === 'packing') renderPacking();
+    }, PACKER_TAB_REFRESH_MS);
+  }
+}
+
+function renderPackingCard(o) {
+  let address = '';
+  try {
+    const a = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : (o.delivery_address || {});
+    address = a.entered_address || [a.street_address, a.suburb, a.city, a.zone, a.code, a.country].filter(Boolean).join(', ');
+  } catch { address = ''; }
+  let lineItems = [];
+  try { lineItems = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : (o.line_items || []); } catch {}
+  const time = new Date(o.created_at).toLocaleString('en-ZA', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+  const cfgMap = {
+    awaiting_packing: { label: 'NOT PACKED', cls: 'bg-amber-100 text-amber-800', border: 'border-amber-200' },
+    packed: { label: 'NOT DROPPED OFF', cls: 'bg-amber-100 text-amber-800', border: 'border-amber-200' },
+    dropped_off: { label: 'DROPPED OFF', cls: 'bg-green-100 text-green-700', border: 'border-green-200' },
+    cancelled: { label: 'CANCELLED', cls: 'bg-red-50 text-red-600', border: 'border-red-200' },
+  };
+  const cfg = cfgMap[o.packing_status] || { label: (o.packing_status || '').toUpperCase(), cls: 'bg-gray-100 text-gray-600', border: 'border-gray-200' };
+
+  let action = '';
+  if (o.packing_status === 'awaiting_packing') {
+    action = '<button onclick="markPacked(\'' + o.id + '\')" class="w-full mt-4 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-2xl text-sm transition-all">Mark as Packed</button>' +
+             '<button onclick="markDroppedOff(\'' + o.id + '\')" class="w-full mt-2 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Dropped-off</button>';
+  } else if (o.packing_status === 'packed') {
+    action = '<button onclick="markDroppedOff(\'' + o.id + '\')" class="w-full mt-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Dropped-off</button>' +
+             '<button onclick="revertPacking(\'' + o.id + '\')" class="w-full mt-2 py-2 bg-surface-100 hover:bg-surface-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert to Awaiting</button>';
+  } else if (o.packing_status === 'dropped_off') {
+    const droppedAt = o.dropped_off_at ? new Date(o.dropped_off_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : '';
+    action = '<div class="mt-4 py-3 bg-green-50 text-green-700 font-semibold rounded-2xl text-sm text-center">Handed to courier' + (droppedAt ? ' \u2014 ' + droppedAt : '') + '</div>' +
+             '<button onclick="revertPacking(\'' + o.id + '\')" class="w-full mt-2 py-2 bg-surface-100 hover:bg-surface-200 text-gray-600 font-medium rounded-xl text-xs transition-all">Revert</button>';
+  }
+
+  let html = '<div class="bg-white rounded-3xl shadow-card border ' + cfg.border + ' p-6 hover:shadow-card-hover transition-all">';
+  html += '<div class="flex items-start justify-between gap-3 mb-3">' +
+            '<div><div class="text-xl font-bold tracking-tight">Order #' + escapeHtml(o.order_number || '-') + '</div>' +
+            '<div class="text-xs text-gray-400 mt-0.5">' + escapeHtml(time) + '</div></div>' +
+            '<span class="px-3 py-1 rounded-full text-[10px] font-bold tracking-wide whitespace-nowrap ' + cfg.cls + '">' + cfg.label + '</span>' +
+          '</div>';
+  if (o.tenant_email) {
+    html += '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-2">Tenant: ' + escapeHtml(o.tenant_email) + '</div>';
+  }
+  html += '<div class="mb-3">' +
+            '<div class="font-bold text-gray-900">' + escapeHtml(o.customer_name || 'Unknown') + '</div>' +
+            '<div class="text-sm text-gray-500">' + escapeHtml(o.customer_phone || '') + '</div>' +
+          '</div>';
+  if (address) html += '<div class="text-sm text-gray-600 mb-3 leading-relaxed">' + escapeHtml(address) + '</div>';
+  if (lineItems.length) {
+    html += '<div class="mb-3"><div class="text-sm font-bold text-gray-900 mb-1">Items:</div><ul class="text-sm text-gray-700 space-y-0.5">';
+    lineItems.forEach(function (li) {
+      html += '<li class="flex items-start gap-2"><span class="text-gray-400 mt-0.5">\u2022</span><span>' + escapeHtml(li.name || 'Item') + ' <span class="text-gray-500">x ' + (li.quantity || 1) + '</span></span></li>';
+    });
+    html += '</ul></div>';
+  }
+  html += '<div class="space-y-1 text-sm pb-2">';
+  if (o.waybill) html += '<div><span class="font-bold text-gray-900">Waybill:</span> <span class="text-gray-700 font-mono">' + escapeHtml(o.waybill) + '</span></div>';
+  if (o.pincode) html += '<div><span class="font-bold text-gray-900">PIN:</span> <span class="text-gray-700 font-mono">' + escapeHtml(o.pincode) + '</span></div>';
+  html += '</div>';
+  if (o.delivery_method) {
+    html += '<div class="text-[11px] text-gray-400 uppercase tracking-wide mt-2">' + escapeHtml((o.delivery_method || '').replace(/-/g, ' ')) + (o.terminal_id ? ' \u2014 ' + escapeHtml(o.terminal_id) : '') + '</div>';
+  }
+  html += action;
+  html += '</div>';
+  return html;
+}
+
+function setPackingFilter(f) { _packingFilter = f; renderPacking(); }
+function doPackingSearch() { _packingSearch = (document.getElementById('packing-search')?.value || '').trim(); renderPacking(); }
+function clearPackingSearch() { _packingSearch = ''; renderPacking(); }
+
+async function markPacked(orderId) {
+  const { data } = await packerApi('POST', '/packer-auth/orders/' + encodeURIComponent(orderId) + '/mark-packed', {});
+  if (data.success) { toast('Marked as packed', 'success'); renderPacking(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+async function markDroppedOff(orderId) {
+  const { data } = await packerApi('POST', '/packer-auth/orders/' + encodeURIComponent(orderId) + '/mark-dropped-off', {});
+  if (data.success) { toast('Marked as dropped off', 'success'); renderPacking(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+async function revertPacking(orderId) {
+  if (!confirm('Revert this order to awaiting packing?')) return;
+  const { data } = await packerApi('POST', '/packer-auth/orders/' + encodeURIComponent(orderId) + '/revert', {});
+  if (data.success) { toast('Reverted', 'info'); renderPacking(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+
+// ---- Manual Upload ----
+
+async function renderManualUpload() {
+  const status = window._manualFilter || 'pending';
+  const originFilter = window._manualOriginFilter || 'all';
+  const { data } = await packerApi('GET', '/packer-auth/manual-upload-queue?status=' + encodeURIComponent(status));
+  const root = document.getElementById('manual-content');
+  if (!data.success) {
+    root.innerHTML = '<div class="bg-white rounded-3xl shadow-card p-6">' + emptyState('Failed to load', data?.error?.message || '') + '</div>';
+    return;
+  }
+
+  const allOrders = data.data.orders || [];
+  const counts = data.data.counts || { pending: 0, completed: 0 };
+  const classified = allOrders.map(function (o) { return { o: o, origin: _classifyManualReason(o.manual_upload_reason) }; });
+  const originCounts = classified.reduce(function (acc, x) { acc[x.origin.key] = (acc[x.origin.key] || 0) + 1; return acc; }, {});
+  const orders = originFilter === 'all' ? classified : classified.filter(function (x) { return x.origin.key === originFilter; });
+
+  let html = '<div class="flex items-center gap-2 mb-3">';
+  html += '<button onclick="window._manualFilter=\'pending\';renderManualUpload()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' + (status === 'pending' ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200') + '">Pending (' + counts.pending + ')</button>';
+  html += '<button onclick="window._manualFilter=\'completed\';renderManualUpload()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' + (status === 'completed' ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200') + '">Completed (' + counts.completed + ')</button>';
+  html += '</div>';
+
+  const originOrder = ['no_locker', 'caretaker', 'collection', 'manual', 'other'];
+  const visibleOrigins = originOrder.filter(function (k) { return originCounts[k]; });
+  if (visibleOrigins.length > 0) {
+    html += '<div class="flex items-center gap-2 mb-6 flex-wrap">';
+    html += '<span class="text-xs text-gray-400 font-semibold uppercase tracking-wide mr-1">Origin:</span>';
+    html += '<button onclick="window._manualOriginFilter=\'all\';renderManualUpload()" class="px-3 py-1 rounded-full text-[11px] font-semibold transition-all ' + (originFilter === 'all' ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 border border-gray-200') + '">All (' + classified.length + ')</button>';
+    visibleOrigins.forEach(function (key) {
+      const sample = classified.find(function (x) { return x.origin.key === key; }).origin;
+      const cls = MANUAL_TONE_CLASSES[sample.tone] || MANUAL_TONE_CLASSES.gray;
+      const active = originFilter === key;
+      html += '<button onclick="window._manualOriginFilter=\'' + key + '\';renderManualUpload()" class="px-3 py-1 rounded-full text-[11px] font-semibold transition-all ' + (active ? cls.pill : 'bg-white text-gray-500 border border-gray-200') + '">' + escapeHtml(sample.label) + ' (' + originCounts[key] + ')</button>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div class="mb-6"></div>';
+  }
+
+  if (orders.length === 0) {
+    html += '<div class="bg-white rounded-3xl shadow-card p-6">' +
+      emptyState('No orders in your manual queue',
+        status === 'pending'
+          ? 'Orders that need a manual courier upload will appear here once a tenant assigns them to you.'
+          : 'No completed manual uploads yet.') +
+      '</div>';
+  } else {
+    html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
+    orders.forEach(function (entry) {
+      const o = entry.o; const origin = entry.origin;
+      const tone = MANUAL_TONE_CLASSES[origin.tone] || MANUAL_TONE_CLASSES.gray;
+      let address = '';
+      try { const a = typeof o.delivery_address === 'string' ? JSON.parse(o.delivery_address) : (o.delivery_address || {}); address = a.entered_address || ''; } catch {}
+      let lineItems = [];
+      try { lineItems = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : (o.line_items || []); } catch {}
+      const time = new Date(o.created_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+
+      html += '<div class="bg-white rounded-3xl shadow-card border-l-4 ' + tone.ring.replace('border-', 'border-l-') + ' border-y border-r border-gray-100 p-6">';
+      html += '<div class="flex items-start justify-between mb-3 gap-2">' +
+                '<div class="min-w-0">' +
+                  '<div class="text-xl font-bold truncate">Order #' + escapeHtml(o.order_number || '-') + '</div>' +
+                  '<div class="text-xs text-gray-400">' + escapeHtml(time) + '</div>' +
+                '</div>' +
+                '<div class="flex flex-col items-end gap-1 flex-shrink-0">' +
+                  '<span class="px-3 py-1 rounded-full text-[10px] font-bold ' + (o.waybill ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800') + '">' + (o.waybill ? 'UPLOADED' : 'NEEDS UPLOAD') + '</span>' +
+                  '<span class="px-2.5 py-0.5 rounded-full text-[10px] font-semibold ' + tone.pill + '">' + escapeHtml(origin.label) + '</span>' +
+                '</div>' +
+              '</div>';
+      if (o.tenant_email) html += '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-2">Tenant: ' + escapeHtml(o.tenant_email) + '</div>';
+      html += '<div class="font-bold">' + escapeHtml(o.customer_name || '') + '</div>';
+      html += '<div class="text-sm text-gray-500">' + escapeHtml(o.customer_phone || '') + '</div>';
+      if (address) html += '<div class="text-sm text-gray-600 mt-2">' + escapeHtml(address) + '</div>';
+      if (lineItems.length) html += '<div class="mt-2 text-sm"><strong>Items:</strong> ' + lineItems.map(function (li) { return escapeHtml(li.name) + ' x ' + (li.quantity || 1); }).join(', ') + '</div>';
+
+      if (o.manual_upload_reason || origin.hint) {
+        html += '<div class="' + tone.bg + ' ' + tone.text + ' rounded-xl px-3 py-2 mt-3 text-[11px] leading-relaxed">';
+        if (o.manual_upload_reason) html += '<div>' + escapeHtml(o.manual_upload_reason) + '</div>';
+        if (origin.hint) html += '<div class="opacity-80 mt-0.5">' + escapeHtml(origin.hint) + '</div>';
+        html += '</div>';
+      }
+
+      if (o.waybill) {
+        html += '<div class="mt-3 p-3 bg-green-50 rounded-xl text-sm"><strong>Waybill:</strong> ' + escapeHtml(o.waybill) + ' <strong>PIN:</strong> ' + escapeHtml(o.pincode || '-') + '</div>';
+      } else {
+        html += '<div class="mt-4 space-y-2">' +
+          '<input id="mu-waybill-' + o.id + '" placeholder="Waybill (e.g. LD-XXXXX)" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">' +
+          '<input id="mu-pin-' + o.id + '" placeholder="PIN (optional)" class="w-full px-3 py-2 bg-surface-100 rounded-xl text-sm border-0">' +
+          '<button onclick="completeManualUpload(\'' + o.id + '\')" class="w-full py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Submit Waybill</button>' +
+          '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  root.innerHTML = html;
+}
+
+async function completeManualUpload(orderId) {
+  const waybill = document.getElementById('mu-waybill-' + orderId)?.value?.trim();
+  const pincode = document.getElementById('mu-pin-' + orderId)?.value?.trim();
+  if (!waybill) { toast('Waybill is required', 'error'); return; }
+  const { data } = await packerApi('POST', '/packer-auth/manual-upload-queue/' + encodeURIComponent(orderId) + '/complete', { waybill: waybill, pincode: pincode });
+  if (data.success) { toast('Waybill recorded \u2014 order is now in fulfillment', 'success'); renderManualUpload(); }
+  else toast(data.error?.message || 'Failed', 'error');
+}
+
+// ---- Collections ----
+
+async function renderCollections() {
+  const status = window._collectionFilter || 'pending';
+  const { data } = await packerApi('GET', '/packer-auth/collection-queue?status=' + encodeURIComponent(status));
+  const root = document.getElementById('collections-content');
+  if (!data.success) {
+    root.innerHTML = '<div class="bg-white rounded-3xl shadow-card p-6">' + emptyState('Failed to load', data?.error?.message || '') + '</div>';
+    return;
+  }
+  const orders = data.data.orders || [];
+  const counts = data.data.counts || { pending: 0, collected: 0 };
+
+  let html = '<div class="flex items-center gap-2 mb-6">';
+  html += '<button onclick="window._collectionFilter=\'pending\';renderCollections()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' + (status === 'pending' ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200') + '">Awaiting Collection (' + counts.pending + ')</button>';
+  html += '<button onclick="window._collectionFilter=\'collected\';renderCollections()" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' + (status === 'collected' ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200') + '">Collected (' + counts.collected + ')</button>';
+  html += '</div>';
+
+  if (orders.length === 0) {
+    html += '<div class="bg-white rounded-3xl shadow-card p-6">' +
+      emptyState('No collection orders',
+        status === 'pending'
+          ? 'Orders where the customer picks up will appear here once a tenant assigns them to you.'
+          : 'No confirmed collections yet.') +
+      '</div>';
+  } else {
+    html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
+    orders.forEach(function (o) {
+      let lineItems = [];
+      try { lineItems = typeof o.line_items === 'string' ? JSON.parse(o.line_items) : (o.line_items || []); } catch {}
+      const time = new Date(o.created_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+      html += '<div class="bg-white rounded-3xl shadow-card border ' + (o.collected_at ? 'border-green-200' : 'border-blue-200') + ' p-6">';
+      html += '<div class="flex items-start justify-between mb-3">' +
+                '<div><div class="text-xl font-bold">Order #' + escapeHtml(o.order_number || '-') + '</div>' +
+                '<div class="text-xs text-gray-400">' + escapeHtml(time) + '</div></div>' +
+                '<span class="px-3 py-1 rounded-full text-[10px] font-bold ' + (o.collected_at ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700') + '">' + (o.collected_at ? 'COLLECTED' : 'AWAITING') + '</span>' +
+              '</div>';
+      if (o.tenant_email) html += '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-2">Tenant: ' + escapeHtml(o.tenant_email) + '</div>';
+      html += '<div class="font-bold">' + escapeHtml(o.customer_name || '') + '</div>';
+      html += '<div class="text-sm text-gray-500">' + escapeHtml(o.customer_phone || '') + '</div>';
+      if (lineItems.length) html += '<div class="mt-2 text-sm"><strong>Items:</strong> ' + lineItems.map(function (li) { return escapeHtml(li.name) + ' x ' + (li.quantity || 1); }).join(', ') + '</div>';
+      if (o.collected_at) {
+        html += '<div class="mt-3 py-3 bg-green-50 text-green-700 font-semibold rounded-2xl text-sm text-center">Collected ' + new Date(o.collected_at).toLocaleString('en-ZA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) + '</div>';
+      } else {
+        html += '<button onclick="confirmCollection(\'' + o.id + '\')" class="w-full mt-4 py-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-2xl text-sm transition-all">Confirm Collected</button>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+  root.innerHTML = html;
+}
+
+async function confirmCollection(orderId) {
+  const { data } = await packerApi('POST', '/packer-auth/collection-queue/' + encodeURIComponent(orderId) + '/confirm', {});
+  if (data.success) { toast('Collection confirmed', 'success'); renderCollections(); }
+  else toast(data.error?.message || 'Failed', 'error');
 }
 
 // Mobile drawer
