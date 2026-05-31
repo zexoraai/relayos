@@ -1908,10 +1908,28 @@ async function renderCaretaker() {
   html += `</div><button onclick="saveCaretakerRules()" class="mt-4 w-full py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-full text-sm transition-all">Save Rules</button>`;
   html += `</div>`;
 
-  // Evaluations panel — header changes based on whether anything's
-  // critical so the operator can spot a slipping collection window
-  // from across the room.
-  html += `<div class="lg:col-span-2 bg-white rounded-3xl shadow-card p-6">`;
+  // Evaluations panel — wrapped in a stable id container so _pollCaretaker
+  // can refresh only its inner HTML during the 3s/30s polls without
+  // disturbing the surrounding scroll container.
+  html += `<div class="lg:col-span-2 bg-white rounded-3xl shadow-card p-6" id="caretaker-evals-panel">`;
+  html += _renderCaretakerEvalsHtml(evals, counts);
+  html += `</div>`;
+  html += `</div>`;
+
+  document.getElementById('tab-content').innerHTML = html;
+  _scheduleCaretakerPoll(evals, counts);
+}
+
+/**
+ * Inner HTML for the Evaluations panel only — header + filter chips +
+ * critical banner + the evaluations list. Pure function of (evals,
+ * counts) plus the global filter state.
+ *
+ * Used by both the full renderCaretaker render and the lightweight
+ * _pollCaretaker() that updates only this panel during auto-refresh.
+ */
+function _renderCaretakerEvalsHtml(evals, counts) {
+  let html = '';
   html += `<div class="flex items-center justify-between mb-2 flex-wrap gap-2">`;
   html += `<h3 class="font-bold text-base">Evaluations</h3>`;
   html += `<select onchange="setCaretakerFilter('sort', this.value)" class="px-3 py-1.5 bg-surface-100 rounded-xl text-xs border-0">` +
@@ -1921,7 +1939,6 @@ async function renderCaretaker() {
     `</select>`;
   html += `</div>`;
 
-  // Critical banner — only shows when something has been waiting > 24h.
   if (counts.critical > 0) {
     html += `<div class="mb-3 px-4 py-3 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-3">` +
       `<span class="inline-block w-2.5 h-2.5 rounded-full bg-red-500 pulse-dot mt-1 flex-shrink-0"></span>` +
@@ -1933,7 +1950,6 @@ async function renderCaretaker() {
     `</div>`;
   }
 
-  // Filter chips with live counts.
   const chipDef = [
     ['all',      'All',      counts.all,      'bg-gray-100 hover:bg-gray-200 text-gray-700',     'bg-gray-700 text-white'],
     ['critical', '> 24h',    counts.critical, 'bg-red-50 hover:bg-red-100 text-red-700',         'bg-red-500 text-white'],
@@ -1953,140 +1969,142 @@ async function renderCaretaker() {
     html += `<p class="text-sm text-gray-400">No evaluations match this filter.</p>`;
   } else {
     html += `<div class="space-y-2 max-h-[600px] overflow-y-auto pr-1" id="caretaker-eval-list">`;
-    evals.forEach(e => {
-      const flags = Array.isArray(e.flags)?e.flags:(e.flags||[]);
-
-      // Visual treatment per urgency tier — only applied to unresolved
-      // rows so the eye lands on what still needs work first.
-      const isResolved = !!e.resolution;
-      const tier = e.urgency || 'fresh';
-      let rowClass = 'border-gray-100';
-      if (!isResolved) {
-        if (tier === 'critical') rowClass = 'border-red-200 bg-red-50/40 border-l-4 border-l-red-500';
-        else if (tier === 'high') rowClass = 'border-amber-200 bg-amber-50/40 border-l-4 border-l-amber-500';
-        else if (tier === 'normal') rowClass = 'border-blue-100 border-l-4 border-l-blue-300';
-      }
-
-      // Age pill — humanize the age in hours/minutes/days.
-      const ageLabel = formatAgeShort(e.age_seconds || 0);
-      let agePillClass = 'bg-gray-100 text-gray-500';
-      if (!isResolved) {
-        if (tier === 'critical') agePillClass = 'bg-red-500 text-white font-bold';
-        else if (tier === 'high') agePillClass = 'bg-amber-500 text-white font-semibold';
-        else if (tier === 'normal') agePillClass = 'bg-blue-100 text-blue-700';
-        else agePillClass = 'bg-green-50 text-green-600';
-      }
-
-      // After approval, the underlying pipeline_job moves processing -> completed/failed.
-      // Surface that state here so the reviewer doesn't have to flip to the
-      // Pipeline tab to see what happened next.
-      let postResolutionPill = '';
-      if (e.resolution === 'approved') {
-        if (e.pipeline_status === 'processing' && e.pipeline_caretaker_verdict === 'approve') {
-          postResolutionPill = `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap"><span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot mr-1 align-middle"></span>resuming</span>`;
-        } else if (e.pipeline_status === 'completed' && (e.order_waybill || e.order_status === 'submitted' || e.order_status === 'completed' || e.order_status === 'delivered')) {
-          postResolutionPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">submitted${e.order_waybill ? ' &middot; ' + escapeHtml(e.order_waybill) : ''}</span>`;
-        } else if (e.pipeline_status === 'failed') {
-          postResolutionPill = `<span class="text-[10px] text-red-600 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="${escapeHtml(e.pipeline_last_error || '')}">submit failed</span>`;
-        } else if (e.pipeline_status === 'rejected') {
-          postResolutionPill = `<span class="text-[10px] text-red-500 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">rejected by pipeline</span>`;
-        }
-      }
-
-      html += `<div class="p-3 rounded-2xl border ${rowClass}" data-eval-id="${e.id}">`;
-      // Header: age pill + timestamp + order ref + verdict badge + post-resolution pill
-      html += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
-      html += `<div class="flex items-center gap-2 min-w-0">`;
-      html += `<span class="text-[10px] px-2 py-0.5 rounded-full ${agePillClass} whitespace-nowrap" title="Age since the review opened">${escapeHtml(ageLabel)}</span>`;
-      html += `<span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>`;
-      if (e.order_number) {
-        html += `<span class="text-[11px] text-gray-700 font-semibold truncate">#${escapeHtml(e.order_number)}${e.customer_name ? ' &middot; ' + escapeHtml(e.customer_name) : ''}</span>`;
-      }
-      html += `</div>`;
-      html += `<div class="flex items-center gap-2">`;
-      html += postResolutionPill;
-      // Badge reflects the *current* state of the evaluation, not the
-      // original system verdict. Once a reviewer has resolved it,
-      // `resolution` wins; otherwise fall back to the system verdict.
-      // This keeps the amber "review" pill scoped to items that still
-      // need attention.
-      let badgeStatus, badgeText;
-      if (e.resolution === 'approved') {
-        badgeStatus = 'completed'; badgeText = 'approved';
-      } else if (e.resolution === 'rejected') {
-        badgeStatus = 'failed'; badgeText = 'rejected';
-      } else if (e.verdict === 'review') {
-        badgeStatus = 'pending_review'; badgeText = 'review';
-      } else if (e.verdict === 'approve') {
-        badgeStatus = 'completed'; badgeText = 'auto-approved';
-      } else if (e.verdict === 'reject') {
-        badgeStatus = 'failed'; badgeText = 'auto-rejected';
-      } else {
-        badgeStatus = 'failed'; badgeText = e.verdict || 'unknown';
-      }
-      html += badge(badgeStatus, badgeText);
-      html += `</div></div>`;
-
-      html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary||'-')}</div>`;
-
-      // If the resumed pipeline failed, surface the reason inline so the
-      // reviewer can decide whether to reopen (vs. flipping to Pipeline tab).
-      if (e.resolution === 'approved' && e.pipeline_status === 'failed' && e.pipeline_last_error) {
-        const short = e.pipeline_last_error.length > 200 ? e.pipeline_last_error.slice(0, 200) + '…' : e.pipeline_last_error;
-        html += `<div class="text-[11px] text-red-600 bg-red-50 rounded-lg px-2.5 py-1.5 mt-2"><span class="font-semibold">After submit:</span> ${escapeHtml(short)}</div>`;
-      }
-
-      let actions = '';
-      if (e.verdict==='review' && !e.resolution) {
-        // Accept AI shortcut: only renders when the address reconciler
-        // produced a usable suggestion. One click sends a resolve with
-        // overrides built from the AI suggestion — saves the reviewer
-        // ~6 field-by-field clicks for the common case.
-        const acceptAiBtn = (e.recon_ai_used && e.recon_ai_suggestion && (e.recon_decision === 'auto_merged_low' || (e.recon_decision === 'flagged' && e.recon_confidence >= 0.5)))
-          ? `<button onclick="acceptAiSuggestion('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100" title="Approve using AI's address fill-in (confidence ${typeof e.recon_confidence==='number'?(e.recon_confidence*100|0)+'%':'?'})">&#9889; Accept AI &amp; approve</button>`
-          : '';
-        actions = `${acceptAiBtn}<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
-      } else if (e.verdict==='reject' || e.resolution==='rejected') {
-        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen for review</button>`;
-      } else if (e.verdict==='approve' && !e.resolution) {
-        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-gray-50 text-gray-600 rounded-full text-xs font-semibold hover:bg-gray-100" title="Convert to pending review">Reopen</button>`;
-      } else if (e.resolution === 'approved' && e.pipeline_status === 'failed') {
-        // Approved but the pipeline submit failed — let the reviewer reopen
-        // so they can edit and re-approve without going back to Pipeline.
-        actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen &amp; edit</button>`;
-      }
-      if (actions) html += `<div class="flex gap-2 mt-2 flex-wrap">${actions}</div>`;
-      html += `</div>`;
-    });
+    evals.forEach((e) => { html += _renderCaretakerEvalRowHtml(e); });
     html += `</div>`;
   }
-  html += `</div></div>`;
-  withScrollPreserved(() => {
-    document.getElementById('tab-content').innerHTML = html;
-  });
+  return html;
+}
 
-  // Auto-refresh:
-  //   - 3s while any approved evaluation has a resuming pipeline (so the
-  //     resume -> submitted/failed transition lands without a manual
-  //     refresh, same as before)
-  //   - 30s when there are unresolved critical/high rows (so a fresh
-  //     order aging into critical at, say, hour 8.5 gets noticed without
-  //     the operator hitting refresh)
-  //   - Off otherwise — nothing to watch.
+function _renderCaretakerEvalRowHtml(e) {
+  const isResolved = !!e.resolution;
+  const tier = e.urgency || 'fresh';
+  let rowClass = 'border-gray-100';
+  if (!isResolved) {
+    if (tier === 'critical') rowClass = 'border-red-200 bg-red-50/40 border-l-4 border-l-red-500';
+    else if (tier === 'high') rowClass = 'border-amber-200 bg-amber-50/40 border-l-4 border-l-amber-500';
+    else if (tier === 'normal') rowClass = 'border-blue-100 border-l-4 border-l-blue-300';
+  }
+
+  const ageLabel = formatAgeShort(e.age_seconds || 0);
+  let agePillClass = 'bg-gray-100 text-gray-500';
+  if (!isResolved) {
+    if (tier === 'critical') agePillClass = 'bg-red-500 text-white font-bold';
+    else if (tier === 'high') agePillClass = 'bg-amber-500 text-white font-semibold';
+    else if (tier === 'normal') agePillClass = 'bg-blue-100 text-blue-700';
+    else agePillClass = 'bg-green-50 text-green-600';
+  }
+
+  // After approval, the underlying pipeline_job moves processing -> completed/failed.
+  // Surface that state here so the reviewer doesn't have to flip to the
+  // Pipeline tab to see what happened next.
+  let postResolutionPill = '';
+  if (e.resolution === 'approved') {
+    if (e.pipeline_status === 'processing' && e.pipeline_caretaker_verdict === 'approve') {
+      postResolutionPill = `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap"><span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 pulse-dot mr-1 align-middle"></span>resuming</span>`;
+    } else if (e.pipeline_status === 'completed' && (e.order_waybill || e.order_status === 'submitted' || e.order_status === 'completed' || e.order_status === 'delivered')) {
+      postResolutionPill = `<span class="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">submitted${e.order_waybill ? ' &middot; ' + escapeHtml(e.order_waybill) : ''}</span>`;
+    } else if (e.pipeline_status === 'failed') {
+      postResolutionPill = `<span class="text-[10px] text-red-600 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap" title="${escapeHtml(e.pipeline_last_error || '')}">submit failed</span>`;
+    } else if (e.pipeline_status === 'rejected') {
+      postResolutionPill = `<span class="text-[10px] text-red-500 bg-red-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">rejected by pipeline</span>`;
+    }
+  }
+
+  let html = '';
+  html += `<div class="p-3 rounded-2xl border ${rowClass}" data-eval-id="${e.id}">`;
+  html += `<div class="flex items-center justify-between gap-2 mb-1 flex-wrap">`;
+  html += `<div class="flex items-center gap-2 min-w-0">`;
+  html += `<span class="text-[10px] px-2 py-0.5 rounded-full ${agePillClass} whitespace-nowrap" title="Age since the review opened">${escapeHtml(ageLabel)}</span>`;
+  html += `<span class="text-xs text-gray-400">${new Date(e.created_at).toLocaleString()}</span>`;
+  if (e.order_number) {
+    html += `<span class="text-[11px] text-gray-700 font-semibold truncate">#${escapeHtml(e.order_number)}${e.customer_name ? ' &middot; ' + escapeHtml(e.customer_name) : ''}</span>`;
+  }
+  html += `</div>`;
+  html += `<div class="flex items-center gap-2">`;
+  html += postResolutionPill;
+  let badgeStatus, badgeText;
+  if (e.resolution === 'approved') {
+    badgeStatus = 'completed'; badgeText = 'approved';
+  } else if (e.resolution === 'rejected') {
+    badgeStatus = 'failed'; badgeText = 'rejected';
+  } else if (e.verdict === 'review') {
+    badgeStatus = 'pending_review'; badgeText = 'review';
+  } else if (e.verdict === 'approve') {
+    badgeStatus = 'completed'; badgeText = 'auto-approved';
+  } else if (e.verdict === 'reject') {
+    badgeStatus = 'failed'; badgeText = 'auto-rejected';
+  } else {
+    badgeStatus = 'failed'; badgeText = e.verdict || 'unknown';
+  }
+  html += badge(badgeStatus, badgeText);
+  html += `</div></div>`;
+
+  html += `<div class="text-xs text-gray-500">${escapeHtml(e.summary || '-')}</div>`;
+
+  if (e.resolution === 'approved' && e.pipeline_status === 'failed' && e.pipeline_last_error) {
+    const short = e.pipeline_last_error.length > 200 ? e.pipeline_last_error.slice(0, 200) + '…' : e.pipeline_last_error;
+    html += `<div class="text-[11px] text-red-600 bg-red-50 rounded-lg px-2.5 py-1.5 mt-2"><span class="font-semibold">After submit:</span> ${escapeHtml(short)}</div>`;
+  }
+
+  let actions = '';
+  if (e.verdict === 'review' && !e.resolution) {
+    const acceptAiBtn = (e.recon_ai_used && e.recon_ai_suggestion && (e.recon_decision === 'auto_merged_low' || (e.recon_decision === 'flagged' && e.recon_confidence >= 0.5)))
+      ? `<button onclick="acceptAiSuggestion('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100" title="Approve using AI's address fill-in (confidence ${typeof e.recon_confidence === 'number' ? (e.recon_confidence * 100 | 0) + '%' : '?'})">&#9889; Accept AI &amp; approve</button>`
+      : '';
+    actions = `${acceptAiBtn}<button onclick="openReviewModal('${e.id}')" class="px-3 py-1 bg-green-50 text-green-600 rounded-full text-xs font-semibold hover:bg-green-100">Review &amp; Approve</button><button onclick="resolveCk('${e.id}','rejected')" class="px-3 py-1 bg-red-50 text-red-500 rounded-full text-xs font-semibold hover:bg-red-100">Reject</button>`;
+  } else if (e.verdict === 'reject' || e.resolution === 'rejected') {
+    actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen for review</button>`;
+  } else if (e.verdict === 'approve' && !e.resolution) {
+    actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-gray-50 text-gray-600 rounded-full text-xs font-semibold hover:bg-gray-100" title="Convert to pending review">Reopen</button>`;
+  } else if (e.resolution === 'approved' && e.pipeline_status === 'failed') {
+    actions = `<button onclick="reopenCk('${e.id}')" class="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold hover:bg-amber-100">Reopen &amp; edit</button>`;
+  }
+  if (actions) html += `<div class="flex gap-2 mt-2 flex-wrap">${actions}</div>`;
+  html += `</div>`;
+  return html;
+}
+
+/**
+ * Lightweight refresh of just the Evaluations panel. Updates the
+ * #caretaker-evals-panel inner HTML; leaves the surrounding shell
+ * (rules card, scroll container) intact so the user's scroll
+ * position survives.
+ */
+async function _pollCaretaker() {
+  if (currentTab !== 'caretaker') return;
+  const params = new URLSearchParams();
+  params.set('limit', '100');
+  if (_caretakerFilters.urgency && _caretakerFilters.urgency !== 'all') params.set('urgency', _caretakerFilters.urgency);
+  if (_caretakerFilters.sort) params.set('sort', _caretakerFilters.sort);
+  const { data: evalsRes } = await api('GET', '/caretaker/evaluations?' + params.toString());
+  if (currentTab !== 'caretaker') return;
+  const evals = evalsRes && evalsRes.success ? evalsRes.data : [];
+  const counts = (evalsRes && evalsRes.success && evalsRes.counts) || {
+    critical: 0, high: 0, normal: 0, fresh: 0, resolved: 0, all: evals.length,
+  };
+  const panel = document.getElementById('caretaker-evals-panel');
+  if (panel) panel.innerHTML = _renderCaretakerEvalsHtml(evals, counts);
+  _scheduleCaretakerPoll(evals, counts);
+}
+
+function _scheduleCaretakerPoll(evals, counts) {
   const inFlight = evals.some((e) => e.resolution === 'approved' && (e.pipeline_status === 'processing' || e.pipeline_status === 'pending_review'));
   const hasUrgent = (counts.critical || 0) + (counts.high || 0) > 0;
   clearTimeout(window._caretakerTimer);
   if (currentTab === 'caretaker') {
     if (inFlight) {
-      window._caretakerTimer = setTimeout(() => { if (currentTab === 'caretaker') renderCaretaker(); }, 3000);
+      window._caretakerTimer = setTimeout(_pollCaretaker, 3000);
     } else if (hasUrgent) {
-      window._caretakerTimer = setTimeout(() => { if (currentTab === 'caretaker') renderCaretaker(); }, 30000);
+      window._caretakerTimer = setTimeout(_pollCaretaker, 30000);
     }
   }
 }
 
 function setCaretakerFilter(key, value) {
   _caretakerFilters[key] = value;
+  // Filter changes warrant a full render: the list contents and the
+  // chip layout change together, and the user explicitly asked for
+  // it so a scroll-to-top is acceptable here.
   renderCaretaker();
 }
 
@@ -4071,6 +4089,15 @@ let _packingFilter = 'awaiting_packing';
 let _packingSearch = '';
 let _packingTimer = null;
 
+/**
+ * The Packing renderer is split into a stable shell (chips + search +
+ * list container) and a partial-update path. Initial entry to the tab
+ * goes through `renderPacking()` which writes the whole shell into
+ * #tab-content. The 20s auto-refresh and post-action calls go
+ * through `_pollPacking()` which only updates the inner list +
+ * chip counts. Because `#tab-content` itself is never overwritten,
+ * the user's scroll position is left alone — no snap-back.
+ */
 async function renderPacking() {
   const url = `/packer/queue?status=${_packingFilter}` + (_packingSearch ? `&search=${encodeURIComponent(_packingSearch)}` : '');
   const { data } = await api('GET', url);
@@ -4080,50 +4107,87 @@ async function renderPacking() {
 
   let html = '';
 
-  // Status filter chips with counts
-  const filters = [
-    { key: 'awaiting_packing', label: 'To Pack', color: 'amber' },
-    { key: 'packed', label: 'Packed', color: 'blue' },
-    { key: 'dropped_off', label: 'Dropped Off', color: 'green' },
-    { key: 'all', label: 'All', color: 'gray' },
-  ];
-  html += `<div class="flex items-center gap-2 mb-4 flex-wrap">`;
-  filters.forEach(f => {
-    const isActive = f.key === _packingFilter;
-    const count = f.key === 'all'
-      ? Object.values(counts).reduce((a, b) => a + b, 0)
-      : (counts[f.key] || 0);
-    html += `<button onclick="setPackingFilter('${f.key}')" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${isActive ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200 hover:border-brand-300 hover:text-gray-900'}">${f.label} (${count})</button>`;
-  });
+  // Status filter chips with counts (rendered once; updated in place by _pollPacking).
+  html += `<div id="packing-chips" class="flex items-center gap-2 mb-4 flex-wrap">`;
+  html += _packingChipsHtml(counts);
   html += `</div>`;
 
-  // Search + auto-refresh hint
+  // Search bar
   html += `<div class="flex gap-2 mb-6">`;
   html += `<input id="packing-search" value="${escapeHtml(_packingSearch)}" placeholder="Search by order #, customer name, phone, or waybill..." onkeydown="if(event.key==='Enter')doPackingSearch()" class="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm placeholder-gray-400 focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all">`;
   html += `<button onclick="doPackingSearch()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-lg text-sm transition-all">Search</button>`;
   if (_packingSearch) html += `<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>`;
   html += `</div>`;
 
-  // Order cards grid (vertical stack on mobile, multi-column on desktop).
-  // We deliberately do NOT use the .h-snap horizontal-snap carousel here:
-  // a long packing queue scrolled sideways one card at a time gives the
-  // packer no birds-eye view and feels much worse than a vertical list.
-  if (orders.length === 0) {
-    html += `<div class="bg-white rounded-3xl shadow-card p-6">${emptyState('Nothing to pack', _packingFilter === 'awaiting_packing' ? 'All orders are packed and dropped off. Great job!' : 'No orders match the current filter.')}</div>`;
-  } else {
-    html += `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">`;
-    orders.forEach(o => html += renderPackingCard(o));
-    html += `</div>`;
-  }
+  // List container — the only thing the poll updates.
+  html += `<div id="packing-list">${_packingListHtml(orders)}</div>`;
 
-  withScrollPreserved(() => {
-    document.getElementById('tab-content').innerHTML = html;
-  });
+  document.getElementById('tab-content').innerHTML = html;
 
-  // Auto-refresh awaiting list every 20s so packers see new orders without manual reload
   clearTimeout(_packingTimer);
   if (_packingFilter === 'awaiting_packing' && currentTab === 'packing') {
-    _packingTimer = setTimeout(() => { if (currentTab === 'packing') renderPacking(); }, 20000);
+    _packingTimer = setTimeout(() => { if (currentTab === 'packing') _pollPacking(); }, 20000);
+  }
+}
+
+function _packingChipsHtml(counts) {
+  const filters = [
+    { key: 'awaiting_packing', label: 'To Pack' },
+    { key: 'packed',           label: 'Packed' },
+    { key: 'dropped_off',      label: 'Dropped Off' },
+    { key: 'all',              label: 'All' },
+  ];
+  return filters.map((f) => {
+    const isActive = f.key === _packingFilter;
+    const count = f.key === 'all'
+      ? Object.values(counts).reduce((a, b) => a + b, 0)
+      : (counts[f.key] || 0);
+    return `<button onclick="setPackingFilter('${f.key}')" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${isActive ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200 hover:border-brand-300 hover:text-gray-900'}">${f.label} (${count})</button>`;
+  }).join('');
+}
+
+function _packingListHtml(orders) {
+  if (!orders || orders.length === 0) {
+    return `<div class="bg-white rounded-3xl shadow-card p-6">${emptyState('Nothing to pack', _packingFilter === 'awaiting_packing' ? 'All orders are packed and dropped off. Great job!' : 'No orders match the current filter.')}</div>`;
+  }
+  let h = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
+  orders.forEach((o) => { h += renderPackingCard(o); });
+  h += '</div>';
+  return h;
+}
+
+/**
+ * Lightweight refresh that updates the chip counts and the list
+ * without touching #tab-content. Scroll position is preserved
+ * because the scroll container is left intact.
+ *
+ * If the user navigated away mid-network, we abort silently.
+ * If a result row currently has an open inline interaction (none
+ * today, but reserved for the future) we'd want to skip the swap;
+ * for now we always swap because the cards have no editable inputs.
+ */
+async function _pollPacking() {
+  if (currentTab !== 'packing') return;
+  const url = `/packer/queue?status=${_packingFilter}` + (_packingSearch ? `&search=${encodeURIComponent(_packingSearch)}` : '');
+  const { data } = await api('GET', url);
+  if (currentTab !== 'packing') return; // bailed out while we were waiting on the network
+  if (!data || !data.success) {
+    // Don't yank the user's view on a transient API hiccup; just retry next tick.
+    clearTimeout(_packingTimer);
+    if (_packingFilter === 'awaiting_packing') _packingTimer = setTimeout(_pollPacking, 20000);
+    return;
+  }
+  const orders = data.data.orders;
+  const counts = data.data.counts || {};
+
+  const chips = document.getElementById('packing-chips');
+  const list = document.getElementById('packing-list');
+  if (chips) chips.innerHTML = _packingChipsHtml(counts);
+  if (list) list.innerHTML = _packingListHtml(orders);
+
+  clearTimeout(_packingTimer);
+  if (_packingFilter === 'awaiting_packing' && currentTab === 'packing') {
+    _packingTimer = setTimeout(_pollPacking, 20000);
   }
 }
 
@@ -4814,9 +4878,7 @@ async function renderManualUpload() {
     });
     html += `</div>`;
   }
-  withScrollPreserved(() => {
-    document.getElementById('tab-content').innerHTML = html;
-  });
+  document.getElementById('tab-content').innerHTML = html;
 }
 
 async function completeManualUpload(orderId) {
@@ -4867,9 +4929,7 @@ async function renderCollections() {
     });
     html += `</div>`;
   }
-  withScrollPreserved(() => {
-    document.getElementById('tab-content').innerHTML = html;
-  });
+  document.getElementById('tab-content').innerHTML = html;
 }
 
 async function confirmCollection(orderId) {

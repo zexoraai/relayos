@@ -896,27 +896,17 @@ function emptyState(title, sub) {
 }
 
 /**
- * Auto-refresh on the Packing tab (every 20s) and post-action re-renders
- * elsewhere were snapping the user back to the top because innerHTML
- * resets scrollTop. Capture the scroll position before the mutation and
- * restore it after the next paint frame, but only when the post-render
- * position snapped to 0. If the user scrolled DURING the network round-
- * trip, we leave their position alone.
+ * Stable wrapper IDs:
+ *   #packing-counters — KPI strip
+ *   #packing-chips    — filter chips with counts
+ *   #packing-list     — the order cards grid
+ *
+ * `renderPacking()` writes the whole shell into #packing-content on
+ * the first entry to the tab; subsequent 20s polls and post-action
+ * re-renders go through `_pollPacking()` which only updates the three
+ * inner containers. The outer scroll context is left intact so the
+ * packer's scroll position survives a refresh.
  */
-function withScrollPreserved(fn) {
-  const main = document.getElementById('main-content');
-  const docEl = document.scrollingElement || document.documentElement;
-  const prevMain = main ? main.scrollTop : 0;
-  const prevDoc = docEl ? docEl.scrollTop : 0;
-  fn();
-  requestAnimationFrame(() => {
-    if (main && main.scrollTop === 0 && prevMain > 0) main.scrollTop = prevMain;
-    if (docEl && docEl.scrollTop === 0 && prevDoc > 0) docEl.scrollTop = prevDoc;
-  });
-}
-
-// ---- Packing ----
-
 async function renderPacking() {
   const url = '/packer-auth/queue?status=' + encodeURIComponent(_packingFilter) +
     (_packingSearch ? '&search=' + encodeURIComponent(_packingSearch) : '');
@@ -931,74 +921,110 @@ async function renderPacking() {
   const counters = data.data.counters || { open: 0, packed_today: 0, packed_this_week: 0, packed_all_time: 0 };
 
   let html = '';
+  html += '<div id="packing-counters">' + _packerCountersHtml(counters) + '</div>';
+  html += '<div id="packing-chips" class="flex items-center gap-2 mb-4 flex-wrap">' + _packerChipsHtml(counts) + '</div>';
+  html += '<div class="flex gap-2 mb-6">' +
+    '<input id="packing-search" value="' + escapeHtml(_packingSearch) + '" placeholder="Search by order #, customer name, phone, or waybill..." onkeydown="if(event.key===\'Enter\')doPackingSearch()" class="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm placeholder-gray-400 focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all">' +
+    '<button onclick="doPackingSearch()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-lg text-sm transition-all">Search</button>' +
+    (_packingSearch ? '<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>' : '') +
+    '</div>';
+  html += '<div id="packing-list">' + _packerListHtml(orders) + '</div>';
 
-  // Performance counters strip — what used to live on the (now-removed)
-  // "My orders" tab. Open / Today / This week / All-time gives the
-  // packer a quick read on their throughput before they dive into the
-  // queue itself.
-  html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">' +
+  root.innerHTML = html;
+
+  clearTimeout(_packingTimer);
+  if (_packingFilter === 'awaiting_packing' && _activeTab === 'packing') {
+    _packingTimer = setTimeout(function () {
+      if (_activeTab === 'packing') _pollPacking();
+    }, PACKER_TAB_REFRESH_MS);
+  }
+}
+
+function _packerCountersHtml(counters) {
+  return '<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">' +
     '<div class="bg-white rounded-3xl shadow-card p-4">' +
       '<div class="text-[11px] uppercase tracking-wide text-brand-700 font-semibold">Open</div>' +
-      '<div class="text-2xl font-bold text-brand-700 mt-0.5">' + counters.open + '</div>' +
+      '<div class="text-2xl font-bold text-brand-700 mt-0.5">' + (counters.open || 0) + '</div>' +
     '</div>' +
     '<div class="bg-white rounded-3xl shadow-card p-4">' +
       '<div class="text-[11px] uppercase tracking-wide text-green-700 font-semibold">Today</div>' +
-      '<div class="text-2xl font-bold text-green-700 mt-0.5">' + counters.packed_today + '</div>' +
+      '<div class="text-2xl font-bold text-green-700 mt-0.5">' + (counters.packed_today || 0) + '</div>' +
     '</div>' +
     '<div class="bg-white rounded-3xl shadow-card p-4">' +
       '<div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">This week</div>' +
-      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + counters.packed_this_week + '</div>' +
+      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + (counters.packed_this_week || 0) + '</div>' +
     '</div>' +
     '<div class="bg-white rounded-3xl shadow-card p-4">' +
       '<div class="text-[11px] uppercase tracking-wide text-gray-600 font-semibold">All time</div>' +
-      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + counters.packed_all_time + '</div>' +
+      '<div class="text-2xl font-bold text-gray-700 mt-0.5">' + (counters.packed_all_time || 0) + '</div>' +
     '</div>' +
   '</div>';
+}
 
+function _packerChipsHtml(counts) {
   const filters = [
     { key: 'awaiting_packing', label: 'To Pack' },
     { key: 'packed', label: 'Packed' },
     { key: 'dropped_off', label: 'Dropped Off' },
     { key: 'all', label: 'All' },
   ];
-  html += '<div class="flex items-center gap-2 mb-4 flex-wrap">';
+  let h = '';
   filters.forEach(function (f) {
     const active = f.key === _packingFilter;
     const count = f.key === 'all'
       ? Object.values(counts).reduce(function (a, b) { return a + b; }, 0)
       : (counts[f.key] || 0);
-    html += '<button onclick="setPackingFilter(\'' + f.key + '\')" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' +
+    h += '<button onclick="setPackingFilter(\'' + f.key + '\')" class="px-4 py-1.5 rounded-full text-xs font-semibold transition-all ' +
       (active ? 'bg-brand-400 text-gray-900' : 'bg-white text-gray-500 border border-gray-200 hover:border-brand-300 hover:text-gray-900') +
       '">' + escapeHtml(f.label) + ' (' + count + ')</button>';
   });
-  html += '</div>';
+  return h;
+}
 
-  html += '<div class="flex gap-2 mb-6">' +
-    '<input id="packing-search" value="' + escapeHtml(_packingSearch) + '" placeholder="Search by order #, customer name, phone, or waybill..." onkeydown="if(event.key===\'Enter\')doPackingSearch()" class="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-sm placeholder-gray-400 focus:ring-2 focus:ring-brand-200 focus:border-brand-400 transition-all">' +
-    '<button onclick="doPackingSearch()" class="px-5 py-2.5 bg-brand-400 hover:bg-brand-500 text-gray-900 font-semibold rounded-lg text-sm transition-all">Search</button>' +
-    (_packingSearch ? '<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>' : '') +
-    '</div>';
-
-  if (orders.length === 0) {
-    html += '<div class="bg-white rounded-3xl shadow-card p-6">' +
+function _packerListHtml(orders) {
+  if (!orders || orders.length === 0) {
+    return '<div class="bg-white rounded-3xl shadow-card p-6">' +
       emptyState('Nothing to pack', _packingFilter === 'awaiting_packing'
         ? 'All orders are packed and dropped off. Great job.'
         : 'No orders match the current filter.') +
       '</div>';
-  } else {
-    html += '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
-    orders.forEach(function (o) { html += renderPackingCard(o); });
-    html += '</div>';
   }
+  let h = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">';
+  orders.forEach(function (o) { h += renderPackingCard(o); });
+  h += '</div>';
+  return h;
+}
 
-  withScrollPreserved(function () { root.innerHTML = html; });
+/**
+ * 20s auto-refresh path — updates only the three inner containers,
+ * leaves the surrounding scroll context untouched.
+ */
+async function _pollPacking() {
+  if (_activeTab !== 'packing') return;
+  const url = '/packer-auth/queue?status=' + encodeURIComponent(_packingFilter) +
+    (_packingSearch ? '&search=' + encodeURIComponent(_packingSearch) : '');
+  const { data } = await packerApi('GET', url);
+  if (_activeTab !== 'packing') return;
+  if (!data || !data.success) {
+    clearTimeout(_packingTimer);
+    if (_packingFilter === 'awaiting_packing' && _activeTab === 'packing') {
+      _packingTimer = setTimeout(_pollPacking, PACKER_TAB_REFRESH_MS);
+    }
+    return;
+  }
+  const orders = data.data.orders || [];
+  const counts = data.data.counts || {};
+  const counters = data.data.counters || { open: 0, packed_today: 0, packed_this_week: 0, packed_all_time: 0 };
+  const c1 = document.getElementById('packing-counters');
+  const c2 = document.getElementById('packing-chips');
+  const c3 = document.getElementById('packing-list');
+  if (c1) c1.innerHTML = _packerCountersHtml(counters);
+  if (c2) c2.innerHTML = _packerChipsHtml(counts);
+  if (c3) c3.innerHTML = _packerListHtml(orders);
 
-  // Auto-refresh awaiting list so packers see new assignments quickly
   clearTimeout(_packingTimer);
   if (_packingFilter === 'awaiting_packing' && _activeTab === 'packing') {
-    _packingTimer = setTimeout(function () {
-      if (_activeTab === 'packing') renderPacking();
-    }, PACKER_TAB_REFRESH_MS);
+    _packingTimer = setTimeout(_pollPacking, PACKER_TAB_REFRESH_MS);
   }
 }
 
@@ -1198,7 +1224,7 @@ async function renderManualUpload() {
     html += '</div>';
   }
 
-  withScrollPreserved(function () { root.innerHTML = html; });
+  root.innerHTML = html;
 }
 
 async function completeManualUpload(orderId) {
@@ -1260,7 +1286,7 @@ async function renderCollections() {
     });
     html += '</div>';
   }
-  withScrollPreserved(function () { root.innerHTML = html; });
+  root.innerHTML = html;
 }
 
 async function confirmCollection(orderId) {
