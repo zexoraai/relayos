@@ -1474,6 +1474,23 @@ async function openOrderDrawer(orderId) {
   if (fj) {
     h += `<button onclick="switchTab('fulfillment')" class="text-[11px] px-3 py-1 rounded-full bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold">Open in Fulfillment</button>`;
   }
+  // Rate-packer shortcut. Available once the parcel has visibly left
+  // the packer's hands. Pulls assigned_packer_id from the order row,
+  // falling back to the most-recent entry of assigned_packer_history
+  // so a reassignment chain is rateable too.
+  const ratablePackerId = (() => {
+    if (o.assigned_packer_id) return o.assigned_packer_id;
+    try {
+      const hist = Array.isArray(o.assigned_packer_history) ? o.assigned_packer_history : (typeof o.assigned_packer_history === 'string' ? JSON.parse(o.assigned_packer_history || '[]') : []);
+      // Find the entry that wasn't rejected — that's the packer who actually delivered.
+      const completed = hist.find((e) => !e.rejected_at);
+      return completed?.packer_id || null;
+    } catch { return null; }
+  })();
+  const isComplete = o.packing_status === 'dropped_off' || o.status === 'delivered';
+  if (ratablePackerId && isComplete) {
+    h += `<button onclick="openRatePackerModal('${ratablePackerId}', '${o.id}', '${escapeHtml(o.order_number || '')}')" class="text-[11px] px-3 py-1 rounded-full bg-brand-50 text-brand-700 hover:bg-brand-100 font-semibold">Rate packer</button>`;
+  }
   h += `</div>`;
 
   h += `</div>`;
@@ -4239,6 +4256,27 @@ async function submitRatePacker(packerId, orderId) {
   }
 }
 
+// ---- Packers tab filters + ratings drawer ----
+//
+// `_packersSearch` and `_packersMinRating` live on `window` so they
+// survive a re-render (e.g. after a row action like Pause). Reset
+// via the "Reset" button in the table header.
+
+function doPackersSearch() {
+  const v = (document.getElementById('packers-search')?.value || '').trim();
+  window._packersSearch = v;
+  renderPackers();
+}
+function setPackersMinRating(threshold) {
+  window._packersMinRating = threshold;
+  renderPackers();
+}
+function resetPackersFilters() {
+  window._packersSearch = '';
+  window._packersMinRating = 0;
+  renderPackers();
+}
+
 // ---- View packer ratings (drawer) ----
 //
 // Operator clicks "Ratings" on a linked-packer row → fetch
@@ -4827,6 +4865,23 @@ async function renderPackers() {
     ? window.RelayPermissions.hasPermission(currentUserPermissions, 'packers.manage')
     : true;
 
+  // Apply persistent filters: search + min rating. Stored on
+  // window so they survive a re-render after a row action.
+  const search = (window._packersSearch || '').toLowerCase().trim();
+  const minRating = parseFloat(window._packersMinRating || '0') || 0;
+  const filteredLinks = links.filter((l) => {
+    if (search) {
+      const haystack = [l.packer_name, l.packer_email, l.packer_business_name, l.packer_phone]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    if (minRating > 0) {
+      const r = l.rating;
+      if (!r || r.count === 0 || r.overall === null || r.overall < minRating) return false;
+    }
+    return true;
+  });
+
   const activeCount = links.filter(l => l.status === 'active').length;
   const pausedCount = links.filter(l => l.status === 'paused').length;
 
@@ -4871,11 +4926,28 @@ async function renderPackers() {
 
   // Linked packers table
   html += `<div class="bg-white rounded-3xl shadow-card overflow-hidden mb-6">`;
-  html += `<div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between">`;
+  html += `<div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">`;
   html += `<div class="font-semibold text-sm">Linked packers</div>`;
+  html += `<div class="flex items-center gap-2 flex-wrap">`;
+  html += `<input id="packers-search" value="${escapeHtml(search)}" placeholder="Search by name, email, phone…" onkeydown="if(event.key==='Enter')doPackersSearch()" class="px-3 py-1.5 bg-surface-100 rounded-full text-xs border-0 placeholder-gray-400 focus:ring-2 focus:ring-brand-200 w-48">`;
+  // Min-rating chips. 0 means no floor (default).
+  const ratingChoices = [0, 3, 4, 4.5];
+  ratingChoices.forEach((r) => {
+    const active = Math.abs((minRating || 0) - r) < 0.01;
+    const label = r === 0 ? 'Any' : `★ ${r}+`;
+    html += `<button onclick="setPackersMinRating(${r})" class="px-3 py-1 rounded-full text-[11px] font-semibold transition-all ${active ? 'bg-gray-900 text-white' : 'bg-surface-100 text-gray-500 border border-gray-200'}">${label}</button>`;
+  });
+  if (search || minRating > 0) {
+    html += `<button onclick="resetPackersFilters()" class="text-[11px] text-gray-500 underline hover:text-gray-800">Reset</button>`;
+  }
   html += `</div>`;
-  if (links.length === 0) {
-    html += emptyState('No linked packers yet', canInvite ? 'Click "Invite Packer" to send your first invite.' : 'No active packer relationships for this tenant.');
+  html += `</div>`;
+  if (filteredLinks.length === 0) {
+    if (links.length === 0) {
+      html += emptyState('No linked packers yet', canInvite ? 'Click "Invite Packer" to send your first invite.' : 'No active packer relationships for this tenant.');
+    } else {
+      html += emptyState('No packers match your filters', 'Try clearing search or lowering the rating threshold.');
+    }
   } else {
     html += `<table class="w-full text-sm">`;
     html += `<thead><tr class="border-b border-gray-100">`;
@@ -4888,7 +4960,7 @@ async function renderPackers() {
     html += `<th class="text-left px-5 py-3 text-[11px] uppercase tracking-wide text-gray-400 font-semibold">Linked</th>`;
     if (canManage) html += `<th class="px-5 py-3"></th>`;
     html += `</tr></thead><tbody>`;
-    links.forEach(l => {
+    filteredLinks.forEach(l => {
       const initial = (l.packer_name || l.packer_email || '?')[0].toUpperCase();
       const display = l.packer_name || l.packer_email || '(unknown)';
       const business = l.packer_business_name ? `<div class="text-xs text-gray-400">${escapeHtml(l.packer_business_name)}</div>` : '';

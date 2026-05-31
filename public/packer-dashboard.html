@@ -404,6 +404,19 @@
                 </div>
               </section>
 
+              <section>
+                <h3 class="font-semibold text-sm mb-1">Communication preferences</h3>
+                <p class="text-xs text-gray-500 mb-3">
+                  Opt in to a Sunday-evening WhatsApp summary of your
+                  ratings for the week. Aggregate-only — we never share
+                  which tenant rated you what.
+                </p>
+                <label class="flex items-center gap-3 px-3 py-2.5 bg-surface-100 rounded-xl text-sm cursor-pointer">
+                  <input type="checkbox" id="pf-weekly_digest_enabled" class="accent-brand-500 w-4 h-4">
+                  <span>Send me a weekly rating digest on WhatsApp</span>
+                </label>
+              </section>
+
               <div class="flex items-center justify-end gap-3 pt-2 border-t border-gray-100">
                 <span id="profile-feedback" class="hidden text-xs"></span>
                 <button type="submit" id="profile-save"
@@ -590,6 +603,10 @@ function populateProfileForm(p) {
   set('pf-collection_contact_phone', p.collection_contact_phone);
   set('pf-collection_contact_email', p.collection_contact_email);
 
+  // Weekly digest opt-in checkbox.
+  const digestBox = document.getElementById('pf-weekly_digest_enabled');
+  if (digestBox) digestBox.checked = !!p.weekly_digest_enabled;
+
   // Collection point type radio + show/hide. Default 'both' if the
   // server hasn't told us yet (the migration backfills 'both' too).
   const type = p.collection_point_type || 'both';
@@ -646,6 +663,7 @@ function readProfileForm() {
     collection_contact_name: get('pf-collection_contact_name'),
     collection_contact_phone: get('pf-collection_contact_phone'),
     collection_contact_email: get('pf-collection_contact_email'),
+    weekly_digest_enabled: !!document.getElementById('pf-weekly_digest_enabled')?.checked,
   };
   // Only send the locker fields when the type allows it. The server
   // also clears them server-side when type='door', so this is just

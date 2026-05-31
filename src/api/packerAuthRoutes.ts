@@ -247,6 +247,7 @@ router.get('/me', packerAuthMiddleware, async (req: PackerAuthenticatedRequest, 
     'collection_point_type',
     'collection_terminal_id', 'collection_locker_name', 'collection_door_address',
     'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
+    'weekly_digest_enabled',
     'status', 'created_at', 'last_login_at',
   );
   if (!packer) {
@@ -305,6 +306,7 @@ const ALLOWED_PROFILE_FIELDS = [
   'collection_terminal_id', 'collection_locker_name',
   'collection_door_address',
   'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
+  'weekly_digest_enabled',
 ];
 
 const VALID_COLLECTION_TYPES = ['locker', 'door', 'both'];
@@ -343,6 +345,14 @@ router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
     }
   }
 
+  // Coerce weekly_digest_enabled to a boolean. The PUT body might
+  // arrive as 'true' / 'false' from older clients, or as a literal
+  // boolean from the new dashboard.
+  if ('weekly_digest_enabled' in update) {
+    update.weekly_digest_enabled = update.weekly_digest_enabled === true
+      || update.weekly_digest_enabled === 'true';
+  }
+
   // Light validation: the door address must be either null/undefined or
   // an object. Reject arrays / strings to prevent accidental shape drift.
   if (update.collection_door_address !== undefined && update.collection_door_address !== null) {
@@ -363,6 +373,7 @@ router.put('/profile', packerAuthMiddleware, async (req: PackerAuthenticatedRequ
       'collection_point_type',
       'collection_terminal_id', 'collection_locker_name', 'collection_door_address',
       'collection_contact_name', 'collection_contact_phone', 'collection_contact_email',
+      'weekly_digest_enabled',
       'status',
     ]);
 

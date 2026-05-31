@@ -384,11 +384,25 @@ router.post('/ratings', requirePermission('packers.rate'), async (req: Authentic
   // Enforce tenant ownership + packer assignment + completion
   const order = await db('orders')
     .where({ id: orderId, tenant_id: tenantId })
-    .first('id', 'assigned_packer_id', 'packing_status', 'status', 'routing_status');
+    .first('id', 'assigned_packer_id', 'assigned_packer_history', 'packing_status', 'status', 'routing_status');
   if (!order) {
     return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Order not found' } });
   }
-  if (order.assigned_packer_id !== packerId) {
+
+  // Eligibility: the packer must have been assigned to this order at
+  // some point. We accept the *current* assigned_packer_id OR any
+  // entry in assigned_packer_history with no rejected_at — that covers
+  // reassignment chains where an earlier packer rejected and a later
+  // one delivered, and lets a tenant rate the actual deliverer rather
+  // than only whoever the row currently points at.
+  const isCurrent = order.assigned_packer_id === packerId;
+  const history = (() => {
+    if (!order.assigned_packer_history) return [];
+    if (Array.isArray(order.assigned_packer_history)) return order.assigned_packer_history;
+    try { return JSON.parse(order.assigned_packer_history); } catch { return []; }
+  })();
+  const wasInHistory = history.some((e: any) => e && e.packer_id === packerId && !e.rejected_at);
+  if (!isCurrent && !wasInHistory) {
     return res.status(400).json({
       success: false,
       error: { code: 'NOT_ASSIGNED', message: 'This order was not handled by the packer you are rating' },

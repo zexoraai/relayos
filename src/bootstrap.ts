@@ -13,6 +13,7 @@ import { startApiServer } from './api';
 import { startEventDispatchWorker, stopEventDispatchWorker, startOutboxRelay } from './events';
 import { initWhatsApp } from './whatsapp';
 import { startMarketingWorker, stopMarketingWorker } from './marketing/worker';
+import { startPackerDigestWorker, stopPackerDigestWorker } from './packerAuth/digestWorker';
 import { logger } from './observability/logger';
 
 /**
@@ -79,6 +80,7 @@ export async function startWorkers(): Promise<void> {
   startEventDispatchWorker();
   startOutboxRelay();
   startMarketingWorker();
+  startPackerDigestWorker();
 
   await recoverStalledJobs();
 
@@ -137,6 +139,7 @@ export async function gracefulShutdown(signal: string): Promise<void> {
     }
     await stopFulfillmentWorker();
     stopMarketingWorker();
+    stopPackerDigestWorker();
     await stopEventDispatchWorker();
     await closeQueue();
     await closePipelineQueue();
