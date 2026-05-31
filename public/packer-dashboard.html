@@ -895,6 +895,26 @@ function emptyState(title, sub) {
     '</div>';
 }
 
+/**
+ * Auto-refresh on the Packing tab (every 20s) and post-action re-renders
+ * elsewhere were snapping the user back to the top because innerHTML
+ * resets scrollTop. Capture the scroll position before the mutation and
+ * restore it after the next paint frame, but only when the post-render
+ * position snapped to 0. If the user scrolled DURING the network round-
+ * trip, we leave their position alone.
+ */
+function withScrollPreserved(fn) {
+  const main = document.getElementById('main-content');
+  const docEl = document.scrollingElement || document.documentElement;
+  const prevMain = main ? main.scrollTop : 0;
+  const prevDoc = docEl ? docEl.scrollTop : 0;
+  fn();
+  requestAnimationFrame(() => {
+    if (main && main.scrollTop === 0 && prevMain > 0) main.scrollTop = prevMain;
+    if (docEl && docEl.scrollTop === 0 && prevDoc > 0) docEl.scrollTop = prevDoc;
+  });
+}
+
 // ---- Packing ----
 
 async function renderPacking() {
@@ -971,7 +991,7 @@ async function renderPacking() {
     html += '</div>';
   }
 
-  root.innerHTML = html;
+  withScrollPreserved(function () { root.innerHTML = html; });
 
   // Auto-refresh awaiting list so packers see new assignments quickly
   clearTimeout(_packingTimer);
@@ -1178,7 +1198,7 @@ async function renderManualUpload() {
     html += '</div>';
   }
 
-  root.innerHTML = html;
+  withScrollPreserved(function () { root.innerHTML = html; });
 }
 
 async function completeManualUpload(orderId) {
@@ -1240,7 +1260,7 @@ async function renderCollections() {
     });
     html += '</div>';
   }
-  root.innerHTML = html;
+  withScrollPreserved(function () { root.innerHTML = html; });
 }
 
 async function confirmCollection(orderId) {

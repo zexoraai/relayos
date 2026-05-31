@@ -131,6 +131,43 @@ function closeMobileDetail() {
 }
 
 /**
+ * Snap-back guard for in-tab auto-refresh.
+ *
+ * When a tab renderer does `tab-content.innerHTML = ...`, the browser
+ * reflows the DOM with `scrollTop = 0` on whatever scroll container
+ * was holding the previous content. On desktop that's #main-content;
+ * on mobile (max-width: 767px) #main-content has `padding-top: ...`
+ * but the actual scroll happens on the document/body. So if a user is
+ * deep-scrolled in the Packing or Caretaker queue and a 3s/20s auto-
+ * refresh fires, they jump back to the top.
+ *
+ * Wrap the synchronous body-mutating section of an auto-refreshing
+ * renderer in this helper. It captures the scroll position of the
+ * relevant container before the mutation and restores it after the
+ * next paint frame. Mid-task taps (the user pulling to a different
+ * spot DURING the network round-trip) will still take precedence
+ * because we restore based on the captured value, but only when the
+ * post-render position is still 0 (i.e. the browser snapped). If the
+ * user scrolled in the meantime we leave their position alone.
+ */
+function withScrollPreserved(fn) {
+  const main = document.getElementById('main-content');
+  const docEl = document.scrollingElement || document.documentElement;
+  // Capture both — desktop scrolls inside #main-content, mobile scrolls
+  // the document. Restoring both is cheap and idempotent.
+  const prevMain = main ? main.scrollTop : 0;
+  const prevDoc = docEl ? docEl.scrollTop : 0;
+  fn();
+  // requestAnimationFrame puts us after the layout that follows the
+  // innerHTML write. Two RAFs would be paranoid; one is enough in
+  // practice for our DOM sizes.
+  requestAnimationFrame(() => {
+    if (main && main.scrollTop === 0 && prevMain > 0) main.scrollTop = prevMain;
+    if (docEl && docEl.scrollTop === 0 && prevDoc > 0) docEl.scrollTop = prevDoc;
+  });
+}
+
+/**
  * Auto-tag Settings cards (and any other section explicitly marked) as
  * accordions on mobile. Runs whenever #tab-content changes.
  */
@@ -2024,7 +2061,9 @@ async function renderCaretaker() {
     html += `</div>`;
   }
   html += `</div></div>`;
-  document.getElementById('tab-content').innerHTML = html;
+  withScrollPreserved(() => {
+    document.getElementById('tab-content').innerHTML = html;
+  });
 
   // Auto-refresh:
   //   - 3s while any approved evaluation has a resuming pipeline (so the
@@ -4065,19 +4104,21 @@ async function renderPacking() {
   if (_packingSearch) html += `<button onclick="clearPackingSearch()" class="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-lg text-sm transition-all">Clear</button>`;
   html += `</div>`;
 
-  // Order cards grid (or horizontal swipe carousel on mobile via .h-snap)
+  // Order cards grid (vertical stack on mobile, multi-column on desktop).
+  // We deliberately do NOT use the .h-snap horizontal-snap carousel here:
+  // a long packing queue scrolled sideways one card at a time gives the
+  // packer no birds-eye view and feels much worse than a vertical list.
   if (orders.length === 0) {
     html += `<div class="bg-white rounded-3xl shadow-card p-6">${emptyState('Nothing to pack', _packingFilter === 'awaiting_packing' ? 'All orders are packed and dropped off. Great job!' : 'No orders match the current filter.')}</div>`;
   } else {
-    // On mobile (.h-snap rule applies <768px), cards become horizontally
-    // scrollable with snap-points so packers can flick through the queue
-    // one full card at a time. On desktop the grid utility takes over.
-    html += `<div class="h-snap md:grid md:grid-cols-2 xl:grid-cols-3 md:gap-4">`;
+    html += `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">`;
     orders.forEach(o => html += renderPackingCard(o));
     html += `</div>`;
   }
 
-  document.getElementById('tab-content').innerHTML = html;
+  withScrollPreserved(() => {
+    document.getElementById('tab-content').innerHTML = html;
+  });
 
   // Auto-refresh awaiting list every 20s so packers see new orders without manual reload
   clearTimeout(_packingTimer);
@@ -4773,7 +4814,9 @@ async function renderManualUpload() {
     });
     html += `</div>`;
   }
-  document.getElementById('tab-content').innerHTML = html;
+  withScrollPreserved(() => {
+    document.getElementById('tab-content').innerHTML = html;
+  });
 }
 
 async function completeManualUpload(orderId) {
@@ -4824,7 +4867,9 @@ async function renderCollections() {
     });
     html += `</div>`;
   }
-  document.getElementById('tab-content').innerHTML = html;
+  withScrollPreserved(() => {
+    document.getElementById('tab-content').innerHTML = html;
+  });
 }
 
 async function confirmCollection(orderId) {
