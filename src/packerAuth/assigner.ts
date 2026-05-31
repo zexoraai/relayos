@@ -4,6 +4,40 @@ import { createChildLogger } from '../observability/logger';
 
 const log = createChildLogger({ module: 'packer-assigner' });
 
+/**
+ * Rating-aware effective load weight.
+ *
+ *   effective = load_weight * (rating ?? RATING_NEUTRAL) / RATING_NEUTRAL
+ *   floor     = MIN_FRACTION * load_weight
+ *
+ * A packer's nominal load_weight is what the tenant set in the
+ * Packers tab. We multiply it by their cross-tenant overall rating
+ * (0..5) divided by a neutral 4.0, so:
+ *
+ *   - rating 4.0 (neutral) → effective = nominal
+ *   - rating 5.0           → effective = 1.25x nominal
+ *   - rating 2.0           → effective = 0.50x nominal
+ *   - no rating yet        → treated as 4.0 so a brand-new packer
+ *                            isn't immediately starved out by an
+ *                            established competitor.
+ *
+ * The MIN_FRACTION floor (0.25) means even a 1-star packer still
+ * gets a quarter of their nominal share. We don't outright exclude
+ * low-rated packers via this knob; that's what status='paused' and
+ * load_weight=0 are for, both of which are explicit operator actions.
+ */
+const RATING_NEUTRAL = 4.0;
+const MIN_FRACTION = 0.25;
+
+export function effectiveLoadWeight(loadWeight: number, rating: number | null | undefined): number {
+  const nominal = Math.max(loadWeight, 0);
+  if (nominal === 0) return 0;
+  const r = (rating === null || rating === undefined) ? RATING_NEUTRAL : Math.max(0, Math.min(5, rating));
+  const scaled = nominal * (r / RATING_NEUTRAL);
+  const floor = nominal * MIN_FRACTION;
+  return Math.max(scaled, floor);
+}
+
 export interface PackerCollectionProfile {
   packer_id: string;
   full_name: string | null;
@@ -52,23 +86,60 @@ export interface PackerSelection {
  *     usable collection point can't actually receive orders, so we skip
  *     them rather than stamping an order we can't ship.
  */
-export async function selectEligiblePacker(
-  tenantId: string,
-): Promise<PackerSelection | null> {
+/**
+ * Internal: load and rank candidate packers for a tenant.
+ *
+ * Returns an array of candidates already sorted by ascending
+ * cumulative effective load, plus a flag in `chosen` for the winner.
+ * `excludePackerId` is honoured when set so the reject flow never
+ * re-picks the rejecting packer.
+ *
+ * The query joins packers + links and LEFT JOINs an aggregated
+ * `packer_ratings` row per packer so we can compute effective weight
+ * in a single round-trip rather than N round-trips.
+ */
+async function loadRankedCandidates(args: {
+  tenantId: string;
+  excludePackerId?: string | null;
+}): Promise<Array<{
+  link_id: string;
+  load_weight: number;
+  effective_weight: number;
+  cumulative_load: number;
+  rating_overall: number | null;
+  rating_count: number;
+  orders_assigned_count: number;
+  packer_id: string;
+  full_name: string | null;
+  business_name: string | null;
+  phone: string | null;
+  collection_terminal_id: string | null;
+  collection_locker_name: string | null;
+  collection_door_address: any;
+  collection_contact_name: string | null;
+  collection_contact_phone: string | null;
+  collection_contact_email: string | null;
+}>> {
   const db = getDb();
 
-  const settings = await db('tenant_collection_settings')
-    .where({ tenant_id: tenantId })
-    .first('packer_assignment_mode');
+  // Subquery: per-packer aggregate rating across all tenants.
+  // We compute the average of the four criteria as the overall.
+  // Using a subquery keeps the join shape simple and ensures one
+  // row per packer.
+  const ratingsSubquery = db('packer_ratings')
+    .select('packer_id')
+    .select(db.raw('COUNT(*)::int as rating_count'))
+    .select(db.raw(`
+      (AVG(packing_quality) + AVG(speed) + AVG(communication) + AVG(reliability)) / 4.0
+      AS rating_overall
+    `))
+    .groupBy('packer_id')
+    .as('r');
 
-  const mode = (settings?.packer_assignment_mode || 'off').toLowerCase();
-  if (mode === 'off' || mode === 'internal_first') {
-    return null;
-  }
-
-  const candidates = await db('packer_tenant_links as l')
+  let q = db('packer_tenant_links as l')
     .join('packers as p', 'p.id', 'l.packer_id')
-    .where('l.tenant_id', tenantId)
+    .leftJoin(ratingsSubquery, 'r.packer_id', 'l.packer_id')
+    .where('l.tenant_id', args.tenantId)
     .where('l.status', 'active')
     .whereNot('p.status', 'disabled')
     .where('l.load_weight', '>', 0)
@@ -81,7 +152,13 @@ export async function selectEligiblePacker(
           "  OR p.collection_door_address->>'street' <> '' " +
           "  OR p.collection_door_address->>'city' <> '')",
         );
-    })
+    });
+
+  if (args.excludePackerId) {
+    q = q.whereNot('l.packer_id', args.excludePackerId);
+  }
+
+  const rows = await q
     .orderBy('l.last_assigned_at', 'asc', 'first')
     .select(
       'l.id as link_id',
@@ -97,30 +174,64 @@ export async function selectEligiblePacker(
       'p.collection_contact_name',
       'p.collection_contact_phone',
       'p.collection_contact_email',
+      'r.rating_overall',
+      'r.rating_count',
     );
 
+  // Compute effective_weight + cumulative_load in JS so the algorithm
+  // is testable and easy to tweak. The DB-side join already did the
+  // heavy aggregation.
+  const enriched = rows.map((row: any) => {
+    const ratingOverall = row.rating_overall === null || row.rating_overall === undefined
+      ? null
+      : Number(row.rating_overall);
+    const eff = effectiveLoadWeight(row.load_weight, ratingOverall);
+    const cumulative = eff > 0 ? row.orders_assigned_count / eff : Number.POSITIVE_INFINITY;
+    return {
+      ...row,
+      rating_overall: ratingOverall,
+      rating_count: Number(row.rating_count || 0),
+      effective_weight: eff,
+      cumulative_load: cumulative,
+    };
+  });
+
+  // Sort by cumulative load asc; tie-break preserved by the SQL
+  // ordering on last_assigned_at (stable sort).
+  enriched.sort((a, b) => a.cumulative_load - b.cumulative_load);
+  return enriched;
+}
+
+export async function selectEligiblePacker(
+  tenantId: string,
+): Promise<PackerSelection | null> {
+  const db = getDb();
+
+  const settings = await db('tenant_collection_settings')
+    .where({ tenant_id: tenantId })
+    .first('packer_assignment_mode');
+
+  const mode = (settings?.packer_assignment_mode || 'off').toLowerCase();
+  if (mode === 'off' || mode === 'internal_first') {
+    return null;
+  }
+
+  const candidates = await loadRankedCandidates({ tenantId });
   if (!candidates.length) {
     log.info({ tenantId, mode }, 'No eligible independent packer; falling back to tenant defaults');
     return null;
   }
 
-  // Cumulative load = orders_assigned_count / load_weight. Lowest wins;
-  // ties broken by oldest last_assigned_at (already pre-sorted).
-  let chosen = candidates[0];
-  let bestLoad = chosen.orders_assigned_count / Math.max(chosen.load_weight, 1);
-  for (const cand of candidates.slice(1)) {
-    const load = cand.orders_assigned_count / Math.max(cand.load_weight, 1);
-    if (load < bestLoad) {
-      bestLoad = load;
-      chosen = cand;
-    }
-  }
-
+  const chosen = candidates[0];
   log.info({
     tenantId,
     packer_id: chosen.packer_id,
     link_id: chosen.link_id,
-    cumulative_load: bestLoad,
+    cumulative_load: chosen.cumulative_load,
+    nominal_weight: chosen.load_weight,
+    effective_weight: chosen.effective_weight,
+    rating_overall: chosen.rating_overall,
+    rating_count: chosen.rating_count,
     mode,
   }, 'Selected independent packer for order');
 
@@ -314,52 +425,10 @@ async function selectEligiblePackerExcluding(
     return null;
   }
 
-  const candidates = await db('packer_tenant_links as l')
-    .join('packers as p', 'p.id', 'l.packer_id')
-    .where('l.tenant_id', tenantId)
-    .where('l.status', 'active')
-    .whereNot('p.status', 'disabled')
-    .whereNot('l.packer_id', excludePackerId)
-    .where('l.load_weight', '>', 0)
-    .andWhere(function () {
-      this
-        .whereNotNull('p.collection_terminal_id')
-        .orWhereRaw(
-          "p.collection_door_address IS NOT NULL " +
-          "AND (p.collection_door_address->>'street_address' <> '' " +
-          "  OR p.collection_door_address->>'street' <> '' " +
-          "  OR p.collection_door_address->>'city' <> '')",
-        );
-    })
-    .orderBy('l.last_assigned_at', 'asc', 'first')
-    .select(
-      'l.id as link_id',
-      'l.load_weight',
-      'l.orders_assigned_count',
-      'p.id as packer_id',
-      'p.full_name',
-      'p.business_name',
-      'p.phone',
-      'p.collection_terminal_id',
-      'p.collection_locker_name',
-      'p.collection_door_address',
-      'p.collection_contact_name',
-      'p.collection_contact_phone',
-      'p.collection_contact_email',
-    );
-
+  const candidates = await loadRankedCandidates({ tenantId, excludePackerId });
   if (!candidates.length) return null;
 
-  let chosen = candidates[0];
-  let bestLoad = chosen.orders_assigned_count / Math.max(chosen.load_weight, 1);
-  for (const cand of candidates.slice(1)) {
-    const load = cand.orders_assigned_count / Math.max(cand.load_weight, 1);
-    if (load < bestLoad) {
-      bestLoad = load;
-      chosen = cand;
-    }
-  }
-
+  const chosen = candidates[0];
   return {
     packer_id: chosen.packer_id,
     link_id: chosen.link_id,

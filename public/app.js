@@ -4239,6 +4239,89 @@ async function submitRatePacker(packerId, orderId) {
   }
 }
 
+// ---- View packer ratings (drawer) ----
+//
+// Operator clicks "Ratings" on a linked-packer row → fetch
+// /packers/:id/ratings and render aggregate + this tenant's own
+// per-order rating list (including comments).
+
+async function viewPackerRatings(packerId, packerLabel) {
+  openModal(
+    'Ratings — ' + packerLabel,
+    '<div id="ratings-drawer-content" class="text-sm text-gray-400">Loading ratings…</div>',
+    '<button onclick="closeModal()" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-sm">Close</button>',
+  );
+  const { data } = await api('GET', `/packers/${encodeURIComponent(packerId)}/ratings`);
+  const root = document.getElementById('ratings-drawer-content');
+  if (!root) return; // user closed the modal before the request returned
+  if (!data || !data.success) {
+    root.innerHTML = '<div class="text-sm text-red-500">' + escapeHtml(data?.error?.message || 'Failed to load ratings') + '</div>';
+    return;
+  }
+  const agg = data.data.aggregate || { count: 0 };
+  const mine = data.data.mine || [];
+
+  let html = '';
+
+  // Cross-tenant aggregate strip
+  if (agg.count > 0) {
+    const overall = agg.overall != null ? agg.overall.toFixed(2) : '—';
+    html += `<div class="bg-surface-100 rounded-2xl p-4 mb-5">`;
+    html += `<div class="flex items-baseline justify-between mb-2"><div class="font-semibold text-sm">Cross-tenant aggregate</div><div class="text-xs text-gray-400">${agg.count} rating${agg.count === 1 ? '' : 's'}</div></div>`;
+    html += `<div class="text-2xl font-bold mb-3">★ ${overall} <span class="text-sm text-gray-500 font-normal">/ 5</span></div>`;
+    const rows = [
+      ['Packing quality', agg.packing_quality],
+      ['Speed', agg.speed],
+      ['Communication', agg.communication],
+      ['Reliability', agg.reliability],
+    ];
+    html += `<div class="grid grid-cols-2 gap-2">`;
+    rows.forEach(([label, v]) => {
+      const pct = v != null ? Math.max(0, Math.min(100, (v / 5) * 100)) : 0;
+      const display = v != null ? v.toFixed(2) : '—';
+      html += `<div>`;
+      html += `<div class="flex items-baseline justify-between"><div class="text-xs text-gray-500">${escapeHtml(label)}</div><div class="text-xs font-semibold">${display}</div></div>`;
+      html += `<div class="h-1.5 bg-white rounded-full overflow-hidden mt-1"><div class="h-full bg-brand-400" style="width:${pct}%"></div></div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+    html += `</div>`;
+  } else {
+    html += `<div class="text-sm text-gray-500 mb-5">No ratings yet from any tenant.</div>`;
+  }
+
+  // This tenant's own rating rows
+  html += `<div class="font-semibold text-sm mb-2">Your ratings (${mine.length})</div>`;
+  if (mine.length === 0) {
+    html += `<div class="text-sm text-gray-400">You haven't rated this packer yet. Use the "Rate packer" button on a dropped-off order.</div>`;
+  } else {
+    html += `<div class="space-y-2">`;
+    mine.forEach((r) => {
+      const created = r.updated_at ? new Date(r.updated_at).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+      const overall = ((r.packing_quality + r.speed + r.communication + r.reliability) / 4).toFixed(2);
+      html += `<div class="border border-gray-100 rounded-xl p-3">`;
+      html += `<div class="flex items-baseline justify-between mb-1">`;
+      html += `<div class="text-xs text-gray-500">Order <span class="font-mono">#${escapeHtml(r.order_number || r.order_id || '?')}</span></div>`;
+      html += `<div class="text-sm font-semibold">★ ${overall}</div>`;
+      html += `</div>`;
+      html += `<div class="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[11px] text-gray-500 mb-1">`;
+      html += `<div>Pack: <span class="font-semibold text-gray-800">${r.packing_quality}</span></div>`;
+      html += `<div>Speed: <span class="font-semibold text-gray-800">${r.speed}</span></div>`;
+      html += `<div>Comms: <span class="font-semibold text-gray-800">${r.communication}</span></div>`;
+      html += `<div>Reliable: <span class="font-semibold text-gray-800">${r.reliability}</span></div>`;
+      html += `</div>`;
+      if (r.comment) {
+        html += `<div class="text-xs text-gray-600 mt-1 italic">"${escapeHtml(r.comment)}"</div>`;
+      }
+      html += `<div class="text-[11px] text-gray-400 mt-1">${created}</div>`;
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
+  root.innerHTML = html;
+}
+
 
 // ---- Chatbot Config ----
 
@@ -4846,12 +4929,23 @@ async function renderPackers() {
         ratingCell = `<span class="text-xs text-gray-400">—</span>`;
       }
       html += `<td class="px-5 py-3">${ratingCell}</td>`;
-      html += `<td class="px-5 py-3"><span class="font-mono text-sm">${l.load_weight ?? 1}</span></td>`;
+      // Load weight + effective weight (rating-adjusted) so operators
+      // can see the actual share the assigner is using. The formula
+      // matches src/packerAuth/assigner.ts effectiveLoadWeight().
+      const ratingForCalc = (r && r.count > 0 && r.overall != null) ? r.overall : 4.0;
+      const nominal = Math.max(l.load_weight ?? 1, 0);
+      const eff = nominal === 0 ? 0 : Math.max(nominal * ratingForCalc / 4.0, nominal * 0.25);
+      const effDisplay = eff.toFixed(2);
+      const showEff = nominal > 0 && Math.abs(eff - nominal) > 0.01;
+      html += `<td class="px-5 py-3"><div class="font-mono text-sm">${nominal}</div>` +
+        (showEff ? `<div class="text-[11px] text-gray-400">eff. ${effDisplay}</div>` : '') +
+        `</td>`;
       html += `<td class="px-5 py-3">${coll}</td>`;
       html += `<td class="px-5 py-3"><div class="text-sm font-semibold">${l.orders_assigned_count ?? 0}</div><div class="text-xs text-gray-400">Last: ${lastAssigned}</div></td>`;
       html += `<td class="px-5 py-3 text-xs text-gray-500">${linkedAt}</td>`;
       if (canManage) {
         html += `<td class="px-5 py-3 text-right whitespace-nowrap">`;
+        html += `<button onclick="viewPackerRatings('${l.packer_id}', '${escapeHtml(display)}')" class="px-3 py-1.5 bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold rounded-full text-xs transition-all">Ratings</button> `;
         if (l.status === 'active' || l.status === 'paused') {
           html += `<button onclick="editPackerLink('${l.id}', ${l.load_weight ?? 1}, '${escapeHtml(l.status||'')}', ${JSON.stringify(l.note||'').replace(/"/g,'&quot;')})" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-full text-xs transition-all">Edit</button> `;
           if (l.status === 'active') {
