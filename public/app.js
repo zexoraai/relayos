@@ -555,6 +555,14 @@ function emptyState(title, desc, btnText, btnAction) {
  * panel DOM untouched between cycles avoids the "select a row, watch it
  * blink every 3s" issue.
  */
+/**
+ * Build the timeline panel for the Pipeline tab.
+ *
+ * Returns two HTML strings: a stable scroll wrapper (`shellHtml`) and
+ * the rows that go inside it (`rowsHtml`). The full render uses both;
+ * the 3s poll path replaces only the rows so the user's scroll
+ * position inside the scroll wrapper survives.
+ */
 function _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo) {
   const filteredJobs = applyPipelineFilters(pipelineJobs, activeFilter, dateFrom, dateTo);
   if (filteredJobs.length === 0) {
@@ -567,11 +575,11 @@ function _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo) {
     if (!fGrouped[key]) fGrouped[key] = [];
     fGrouped[key].push(j);
   });
-  let html = `<div class="space-y-4 max-h-[600px] overflow-y-auto pr-1">`;
+  let rowsHtml = '';
   Object.entries(fGrouped).forEach(([dateLabel, jobs]) => {
-    html += `<div>`;
-    html += `<div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 sticky top-0 bg-white py-1">${dateLabel}</div>`;
-    html += `<div class="space-y-1.5 relative pl-4 border-l-2 border-gray-100">`;
+    rowsHtml += `<div>`;
+    rowsHtml += `<div class="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2 sticky top-0 bg-white py-1">${dateLabel}</div>`;
+    rowsHtml += `<div class="space-y-1.5 relative pl-4 border-l-2 border-gray-100">`;
     jobs.forEach((job) => {
       const globalIdx = pipelineJobs.indexOf(job);
       const time = new Date(job.created_at).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' });
@@ -581,23 +589,33 @@ function _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo) {
         : job.status === 'processing' ? 'bg-blue-400 pulse-dot'
         : 'bg-gray-300';
       const isActive = window._activeJobId === job.id;
-      html += `<div onclick="showJobDetail(${globalIdx})" data-job-id="${job.id}" class="relative flex items-center gap-3 p-2.5 rounded-xl ${isActive ? 'bg-brand-50/60 ring-1 ring-brand-300' : 'hover:bg-brand-50/40'} cursor-pointer transition-all group">`;
-      html += `<div class="absolute -left-[13px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${dotColor} ring-2 ring-white"></div>`;
-      html += `<span class="text-[11px] text-gray-400 w-12 flex-shrink-0">${time}</span>`;
-      html += `<div class="flex-1 min-w-0"><div class="text-xs font-medium capitalize truncate group-hover:text-brand-700">${stage}</div></div>`;
+      rowsHtml += `<div onclick="showJobDetail(${globalIdx})" data-job-id="${job.id}" class="relative flex items-center gap-3 p-2.5 rounded-xl ${isActive ? 'bg-brand-50/60 ring-1 ring-brand-300' : 'hover:bg-brand-50/40'} cursor-pointer transition-all group">`;
+      rowsHtml += `<div class="absolute -left-[13px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full ${dotColor} ring-2 ring-white"></div>`;
+      rowsHtml += `<span class="text-[11px] text-gray-400 w-12 flex-shrink-0">${time}</span>`;
+      rowsHtml += `<div class="flex-1 min-w-0"><div class="text-xs font-medium capitalize truncate group-hover:text-brand-700">${stage}</div></div>`;
       if (job.status === 'processing' && job.caretaker_verdict === 'approve') {
-        html += `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap mr-1">resuming</span>`;
+        rowsHtml += `<span class="text-[10px] text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium whitespace-nowrap mr-1">resuming</span>`;
       } else if ((job.status === 'failed' || job.status === 'rejected') && job.last_error) {
         const short = job.last_error.length > 36 ? job.last_error.slice(0, 36) + '…' : job.last_error;
-        html += `<span class="text-[10px] text-red-500 truncate max-w-[180px] mr-1" title="${escapeHtml(job.last_error)}">${escapeHtml(short)}</span>`;
+        rowsHtml += `<span class="text-[10px] text-red-500 truncate max-w-[180px] mr-1" title="${escapeHtml(job.last_error)}">${escapeHtml(short)}</span>`;
       }
-      html += badge(job.status);
-      html += `</div>`;
+      rowsHtml += badge(job.status);
+      rowsHtml += `</div>`;
     });
-    html += `</div></div>`;
+    rowsHtml += `</div></div>`;
   });
-  html += `</div>`;
-  return html;
+
+  // "Load older" footer — visible when the server has more rows than
+  // we currently have client-side. Backed by the `total` field in the
+  // /pipeline/jobs response so this is exact, not heuristic.
+  if (window._pipelineCanLoadMore) {
+    const remaining = Math.max(0, (window._pipelineTotal || 0) - pipelineJobs.length);
+    rowsHtml += `<div class="pt-3 mt-3 border-t border-gray-100 flex flex-col items-center gap-1">`;
+    rowsHtml += `<button onclick="loadMorePipeline()" class="text-xs px-3 py-1.5 rounded-full bg-surface-100 hover:bg-surface-200 text-gray-700 font-semibold">Load older</button>`;
+    rowsHtml += `<span class="text-[10px] text-gray-400">Showing ${pipelineJobs.length} of ${window._pipelineTotal || pipelineJobs.length}${remaining ? ` · ${remaining} more` : ''}</span>`;
+    rowsHtml += `</div>`;
+  }
+  return rowsHtml;
 }
 
 /**
@@ -608,18 +626,25 @@ function _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo) {
  */
 async function _pollPipeline() {
   if (currentTab !== 'pipeline') return;
-  const { data } = await api('GET', '/pipeline/jobs?limit=30');
+  const limit = window._pipelinePageSize || 100;
+  const { data } = await api('GET', `/pipeline/jobs?limit=${limit}`);
   if (!data.success) return; // Quietly skip; the next tick will retry.
   const prevJobs = pipelineJobs;
   pipelineJobs = data.data.jobs;
 
-  // Update the timeline column in place.
-  const timeline = document.getElementById('pipeline-timeline');
-  if (timeline) {
+  // Server returns `total` so we know exactly whether more rows exist.
+  const total = Number(data.data.total) || pipelineJobs.length;
+  window._pipelineTotal = total;
+  window._pipelineCanLoadMore = pipelineJobs.length < total;
+
+  // Update only the rows inside the stable scroll wrapper. The wrapper
+  // itself stays mounted so the user's scroll position is preserved.
+  const rowsHost = document.getElementById('pipeline-timeline-rows');
+  if (rowsHost) {
     const activeFilter = window._pipelineFilter || 'all';
     const dateFrom = window._pipelineDateFrom || '';
     const dateTo = window._pipelineDateTo || '';
-    timeline.innerHTML = _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo);
+    rowsHost.innerHTML = _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo);
   }
 
   // Refresh the detail panel ONLY when the underlying job's status or
@@ -647,9 +672,13 @@ async function _pollPipeline() {
 }
 
 async function renderPipeline() {
-  const { data } = await api('GET', '/pipeline/jobs?limit=30');
+  const limit = window._pipelinePageSize || 100;
+  const { data } = await api('GET', `/pipeline/jobs?limit=${limit}`);
   if (!data.success) { document.getElementById('tab-content').innerHTML = emptyState('Failed to load','Check your connection.'); return; }
   pipelineJobs = data.data.jobs;
+  const total = Number(data.data.total) || pipelineJobs.length;
+  window._pipelineTotal = total;
+  window._pipelineCanLoadMore = pipelineJobs.length < total;
   const hasProcessing = pipelineJobs.some(j => j.status === 'processing');
 
   // Group jobs by date
@@ -714,11 +743,14 @@ async function renderPipeline() {
   // Left: Calendar-style grouped list
   html += `<div class="lg:col-span-1"><div class="bg-white rounded-3xl shadow-card p-5">`;
   html += `<h3 class="font-bold text-sm mb-4">Timeline</h3>`;
-  // Wrap the timeline body in a stable container so the lightweight
-  // _pollPipeline() can update only its innerHTML without disturbing
-  // the right-hand detail panel.
-  html += `<div id="pipeline-timeline">`;
+  // Two-layer container so the 3s poll can update only the rows
+  // (#pipeline-timeline-rows) without re-creating the scrollable
+  // wrapper (#pipeline-timeline-scroll). Recreating the scroll
+  // wrapper resets scrollTop to 0 — that was the snap-back bug.
+  html += `<div id="pipeline-timeline-scroll" class="space-y-4 max-h-[600px] overflow-y-auto pr-1">`;
+  html += `<div id="pipeline-timeline-rows">`;
   html += _renderPipelineTimelineHtml(activeFilter, dateFrom, dateTo);
+  html += `</div>`;
   html += `</div>`;
   html += `</div></div>`;
 
@@ -765,6 +797,19 @@ async function renderPipeline() {
 }
 
 function setPipelineFilter(f) { window._pipelineFilter = f; renderPipeline(); }
+
+/**
+ * Bump the visible window by another page (default +100) and re-fetch.
+ * The endpoint clamps at limit=500 server-side, which is plenty for an
+ * operator's history-scrolling needs. If you push past 500 we'd want to
+ * switch to true offset-based pagination — that's a bigger change so we
+ * defer it until somebody actually feels the limit.
+ */
+async function loadMorePipeline() {
+  const current = window._pipelinePageSize || 100;
+  window._pipelinePageSize = Math.min(current + 100, 500);
+  await renderPipeline();
+}
 function setPipelineDatePreset(preset) {
   window._pipelineDatePreset = preset;
   if (preset === 'today') {

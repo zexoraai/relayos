@@ -13,7 +13,7 @@ router.use(authMiddleware);
 router.get('/jobs', requirePermission('pipeline.view'), async (req: AuthenticatedRequest, res: Response) => {
   const db = getDb();
   const tenantId = req.tenant!.tenantId;
-  const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
   const offset = parseInt(req.query.offset as string) || 0;
 
   const jobs = await db('pipeline_jobs')
